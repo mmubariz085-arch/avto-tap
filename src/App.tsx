@@ -9,6 +9,7 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { QuickReplyView } from './components/QuickReplyView';
 import { ShopView } from './components/ShopView';
 import { installGlobalAudioUnlocker } from './utils/notify';
+import { requestPersistentPhoneStorage } from './utils/phoneStorage';
 import type { RequestWithQuotes } from './types';
 
 type ActiveSection = 'driver' | 'shop' | 'admin';
@@ -20,7 +21,7 @@ function readSavedOrders(): SavedOrderSummary[] {
     const raw = localStorage.getItem(SAVED_ORDERS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.slice(0, 6) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, 10) : [];
   } catch {
     return [];
   }
@@ -63,6 +64,8 @@ export default function App() {
   const [legalDoc, setLegalDoc] = useState<LegalDocType>(null);
 
   useEffect(() => {
+    void requestPersistentPhoneStorage();
+
     fetch('/api/public/config')
       .then((res) => res.json())
       .then((data) => {
@@ -133,7 +136,7 @@ export default function App() {
       createdAt: req.createdAt,
     };
     setSavedOrders((prev) => {
-      const next = [summary, ...prev.filter((o) => o.id !== req.id)].slice(0, 6);
+      const next = [summary, ...prev.filter((o) => o.id !== req.id)].slice(0, 10);
       localStorage.setItem(SAVED_ORDERS_KEY, JSON.stringify(next));
       return next;
     });
@@ -161,10 +164,10 @@ export default function App() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900">
-      {/* Compact Sticky Top Bar */}
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
+    <div className="flex min-h-screen flex-col text-slate-900">
+      {/* Compact Frosted Sticky Top Bar (3-Zone Contract) */}
+      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/85 backdrop-blur-xl">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-8 px-4 sm:px-6">
           <button
             type="button"
             onClick={() => {
@@ -179,22 +182,22 @@ export default function App() {
             <img
               src="/icon.svg"
               alt="AvtoTap loqosu"
-              className="h-8 w-8 rounded-lg shrink-0"
+              className="h-8 w-8 rounded-xl shadow-sm shrink-0"
             />
-            <span className="text-lg font-extrabold tracking-tight text-slate-900">
+            <span className="font-display text-lg font-extrabold tracking-tight text-slate-950">
               AvtoTap
             </span>
           </button>
 
           {/* Desktop Navigation */}
-          <nav className="hidden md:flex items-center gap-6 text-sm font-semibold">
+          <nav className="hidden md:flex items-center gap-7 text-sm font-semibold">
             <button
               type="button"
               onClick={() => navigateSection('driver')}
               className={`min-h-[40px] px-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                 section === 'driver'
-                  ? 'border-orange-700 text-slate-900'
-                  : 'border-transparent text-slate-600 hover:text-slate-900'
+                  ? 'border-orange-600 text-slate-950'
+                  : 'border-transparent text-slate-500 hover:text-slate-900'
               }`}
             >
               Sürücü
@@ -204,8 +207,8 @@ export default function App() {
               onClick={() => navigateSection('shop')}
               className={`min-h-[40px] px-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                 section === 'shop'
-                  ? 'border-orange-700 text-slate-900'
-                  : 'border-transparent text-slate-600 hover:text-slate-900'
+                  ? 'border-orange-600 text-slate-950'
+                  : 'border-transparent text-slate-500 hover:text-slate-900'
               }`}
             >
               Mağaza kabineti
@@ -250,9 +253,9 @@ export default function App() {
         )}
       </main>
 
-      {/* Quiet Footer with Legal Links + Discreet Admin Link */}
+      {/* Quiet Footer */}
       <footer
-        className={`border-t border-slate-200 bg-white px-4 py-5 text-xs text-slate-500 ${
+        className={`border-t border-slate-200/80 bg-white/80 px-4 py-5 text-xs text-slate-500 ${
           section !== 'admin' ? 'pb-24 md:pb-6' : 'pb-6'
         }`}
       >
@@ -264,14 +267,14 @@ export default function App() {
             <button
               type="button"
               onClick={() => setLegalDoc('terms')}
-              className="min-h-[36px] font-medium text-slate-700 underline underline-offset-2 hover:text-slate-900"
+              className="min-h-[36px] font-medium text-slate-700 underline underline-offset-2 hover:text-slate-950"
             >
               İstifadəçi razılaşması
             </button>
             <button
               type="button"
               onClick={() => setLegalDoc('privacy')}
-              className="min-h-[36px] font-medium text-slate-700 underline underline-offset-2 hover:text-slate-900"
+              className="min-h-[36px] font-medium text-slate-700 underline underline-offset-2 hover:text-slate-950"
             >
               Məxfilik siyasəti
             </button>
@@ -290,15 +293,18 @@ export default function App() {
       {section !== 'admin' && (
         <nav
           aria-label="Əsas naviqasiya"
-          className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-2 border-t border-slate-200 bg-white/95 backdrop-blur-md pb-safe md:hidden"
+          className="fixed bottom-0 left-0 right-0 z-40 grid grid-cols-2 border-t border-slate-200/80 bg-white/95 backdrop-blur-xl shadow-[0_-8px_28px_-14px_rgba(11,17,32,0.12)] pb-safe md:hidden"
         >
           <button
             type="button"
             onClick={() => navigateSection('driver')}
-            className={`flex min-h-[56px] flex-col items-center justify-center gap-1 text-[11px] font-bold transition-colors ${
+            className={`relative flex min-h-[56px] flex-col items-center justify-center gap-1 text-[11px] font-bold transition-colors ${
               section === 'driver' ? 'text-orange-700' : 'text-slate-500'
             }`}
           >
+            {section === 'driver' && (
+              <span className="absolute top-0 h-0.5 w-8 rounded-full bg-orange-600" />
+            )}
             <Car className="h-5 w-5" />
             <span>Sürücü</span>
           </button>
@@ -306,10 +312,13 @@ export default function App() {
           <button
             type="button"
             onClick={() => navigateSection('shop')}
-            className={`flex min-h-[56px] flex-col items-center justify-center gap-1 text-[11px] font-bold transition-colors ${
+            className={`relative flex min-h-[56px] flex-col items-center justify-center gap-1 text-[11px] font-bold transition-colors ${
               section === 'shop' ? 'text-orange-700' : 'text-slate-500'
             }`}
           >
+            {section === 'shop' && (
+              <span className="absolute top-0 h-0.5 w-8 rounded-full bg-orange-600" />
+            )}
             <Store className="h-5 w-5" />
             <span>Mağaza kabineti</span>
           </button>

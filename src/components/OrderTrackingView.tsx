@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Bell, CheckCircle2, Crown, MessageCircle, Phone, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { buildTelUrl, buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
 import { triggerAlertFeedback } from '../utils/notify';
+import { loadOrderSnapshotFromPhone, saveOrderSnapshotToPhone } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import type { RequestWithQuotes, ShopQuote, WsEvent } from '../types';
 
@@ -36,11 +37,33 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
   );
   const initializedRef = useRef<boolean>(Boolean(initialOrder));
 
+  // Hydrate immediately from phone memory if available while network loads
+  useEffect(() => {
+    let active = true;
+    void loadOrderSnapshotFromPhone(orderId).then((cached) => {
+      if (!active || !cached) return;
+      setOrder((prev) => prev || cached);
+      cached.quotes.forEach((q) => seenQuoteIdsRef.current.add(q.id));
+      setLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [orderId]);
+
   const fetchOrder = useCallback(async () => {
     try {
-      const res = await fetch(`/api/requests/${encodeURIComponent(orderId)}`);
+      const res = await fetch(`/api/requests/${encodeURIComponent(orderId)}`, {
+        cache: 'no-store',
+      });
       const data = await res.json();
       if (!res.ok) {
+        const cached = await loadOrderSnapshotFromPhone(orderId);
+        if (cached) {
+          setOrder(cached);
+          setErrorMsg(null);
+          return;
+        }
         setErrorMsg(data.error || 'Sifariş tapılmadı.');
         setOrder(null);
         return;
@@ -64,12 +87,19 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
       incomingOrder.quotes.forEach((q) => seenQuoteIdsRef.current.add(q.id));
       initializedRef.current = true;
       setOrder(incomingOrder);
+      void saveOrderSnapshotToPhone(incomingOrder);
       if (typeof data.activeShopCount === 'number') {
         setActiveShopCount(data.activeShopCount);
       }
       setErrorMsg(null);
     } catch {
-      setErrorMsg('Məlumat yüklənmədi. Yenidən cəhd edin.');
+      const cached = await loadOrderSnapshotFromPhone(orderId);
+      if (cached) {
+        setOrder(cached);
+        setErrorMsg(null);
+      } else {
+        setErrorMsg('Məlumat yüklənmədi. Yenidən cəhd edin.');
+      }
     } finally {
       setLoading(false);
     }
@@ -117,11 +147,13 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
                 (q) => q.id !== incoming.id && q.shopId !== incoming.shopId
               );
               const merged = sortQuotes([incoming, ...filtered]);
-              return {
+              const nextOrder: RequestWithQuotes = {
                 ...prev,
                 quotes: merged,
                 quoteCount: merged.length,
               };
+              void saveOrderSnapshotToPhone(nextOrder);
+              return nextOrder;
             });
           } else if (event.type === 'request:deleted' && event.payload.requestId === orderId) {
             setErrorMsg('Bu sorğu administrator tərəfindən silinib.');
@@ -151,7 +183,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
 
   if (loading) {
     return (
-      <div className="mx-auto max-w-4xl px-4 py-10 text-center">
+      <div className="mx-auto max-w-4xl px-4 py-12 text-center">
         <p className="text-sm font-medium text-slate-600">Sifariş məlumatları yüklənir...</p>
       </div>
     );
@@ -160,12 +192,12 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
   if (errorMsg || !order) {
     return (
       <div className="mx-auto max-w-xl px-4 py-10">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
-          <p className="text-base font-bold text-slate-900">{errorMsg || 'Sifariş tapılmadı.'}</p>
+        <div className="rounded-3xl border border-slate-200 bg-white p-7 text-center shadow-sm">
+          <p className="font-display text-lg font-bold text-slate-950">{errorMsg || 'Sifariş tapılmadı.'}</p>
           <button
             type="button"
             onClick={onNewRequest}
-            className="mt-5 inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-orange-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-orange-800"
+            className="mt-5 inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl bg-orange-700 px-6 py-3 text-sm font-bold text-white hover:bg-orange-800"
           >
             <Plus className="h-4 w-4" />
             <span>Yeni sorğu yarat</span>
@@ -176,12 +208,12 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6 lg:py-8">
+    <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:py-9">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <button
           type="button"
           onClick={onNewRequest}
-          className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap shrink-0"
+          className="inline-flex min-h-[44px] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50 whitespace-nowrap shrink-0"
         >
           <ArrowLeft className="h-4 w-4" />
           <span>Yeni sorğu göndər</span>
@@ -198,7 +230,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
             type="button"
             onClick={() => void fetchOrder()}
             aria-label="Yenilə"
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-2xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
           >
             <RefreshCw className="h-4 w-4" />
             <span>Yenilə</span>
@@ -209,7 +241,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
       {newQuoteBanner && (
         <div
           role="status"
-          className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-900 shadow-sm"
+          className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3.5 text-sm font-bold text-emerald-950 shadow-sm"
         >
           <span className="inline-flex items-center gap-2">
             <Bell className="h-4 w-4 text-emerald-700 shrink-0" />
@@ -219,7 +251,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
             type="button"
             onClick={() => setNewQuoteBanner(null)}
             aria-label="Bağla"
-            className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-emerald-100"
+            className="flex h-8 w-8 items-center justify-center rounded-xl hover:bg-emerald-100"
           >
             <X className="h-4 w-4" />
           </button>
@@ -227,16 +259,18 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
-        {/* Order Summary Card */}
-        <aside className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-4">
-          <p className="text-xs font-semibold text-slate-500">Sifariş nömrəsi · #{order.id.slice(-6).toUpperCase()}</p>
-          <h1 className="mt-1.5 text-xl font-extrabold text-slate-900">
-            {order.carBrandModel} <span className="font-mono font-bold text-slate-600">({order.year})</span>
+        {/* Order Summary Card (Obsidian High-Contrast Surface) */}
+        <aside className="rounded-3xl bg-[#0B1120] p-6 text-white shadow-[0_14px_32px_-16px_rgba(11,17,32,0.5)] lg:col-span-4">
+          <p className="font-mono text-xs font-semibold text-slate-400">
+            Sifariş · #{order.id.slice(-6).toUpperCase()}
+          </p>
+          <h1 className="mt-2 font-display text-2xl font-extrabold tracking-tight text-white">
+            {order.carBrandModel} <span className="font-mono font-bold text-slate-400">({order.year})</span>
           </h1>
-          <p className="mt-2 text-base font-semibold text-orange-700">{order.partName}</p>
+          <p className="mt-2 text-base font-bold text-orange-400">{order.partName}</p>
 
-          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-            <span className="font-mono tabular-nums">{order.driverWhatsapp}</span>
+          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+            <span className="font-mono tabular-nums text-slate-300">{order.driverWhatsapp}</span>
             <span aria-hidden="true">·</span>
             <span>{formatTimeAgoAz(order.createdAt)}</span>
           </div>
@@ -245,7 +279,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
             <button
               type="button"
               onClick={() => setZoomPhoto(order.photoDataUrl || null)}
-              className="mt-4 block w-full overflow-hidden rounded-xl border border-slate-200"
+              className="mt-4 block w-full overflow-hidden rounded-2xl border border-white/10"
             >
               <img
                 src={order.photoDataUrl}
@@ -256,9 +290,8 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
             </button>
           )}
 
-          <div className="mt-4 border-t border-slate-100 pt-4 text-xs leading-relaxed text-slate-600">
-            Sorğunuz {activeShopCount > 0 ? `${activeShopCount} aktiv mağazaya` : 'mağazalara'} göndərilib.
-            Mağaza qiymət göndərdikcə təkliflər burada dərhal görünəcək.
+          <div className="mt-5 border-t border-white/10 pt-4 text-xs leading-relaxed text-slate-300">
+            Sorğunuz {activeShopCount > 0 ? `${activeShopCount} aktiv mağazaya` : 'mağazalara'} göndərilib və telefon yaddaşında saxlanılır.
           </div>
 
           <div className="mt-4">
@@ -269,24 +302,24 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
         {/* Live Shop Quotes Column */}
         <section className="space-y-4 lg:col-span-8">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-extrabold text-slate-900">
+            <h2 className="font-display text-lg font-extrabold text-slate-950">
               Mağaza cavabları{' '}
               <span className="font-mono tabular-nums text-slate-500">({order.quotes.length})</span>
             </h2>
           </div>
 
           {order.quotes.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+            <div className="rounded-3xl border border-slate-200/90 bg-white p-9 text-center shadow-sm">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
                 <RefreshCw className="h-6 w-6 animate-spin" />
               </div>
-              <h3 className="mt-4 text-base font-bold text-slate-900">Mağazalardan cavab gözlənilir</h3>
+              <h3 className="mt-4 font-display text-base font-bold text-slate-950">Mağazalardan cavab gözlənilir</h3>
               <p className="mt-1.5 text-sm text-slate-600 max-w-md mx-auto">
-                Səhifəni bağlamayın — satıcılar qiymət göndərən kimi təkliflər burada avtomatik görünəcək.
+                Səhifəni bağlamayın və ya puş bildirişləri aktiv saxlayın — satıcılar qiymət göndərən kimi təkliflər burada dərhal görünəcək.
               </p>
             </div>
           ) : (
-            <div className="space-y-3.5">
+            <div className="space-y-4">
               {order.quotes.map((quote) => {
                 const waText = [
                   `Salam, ${quote.shopName}! AvtoTap üzərindən cavabınızı gördüm.`,
@@ -302,14 +335,14 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
                 return (
                   <article
                     key={quote.id}
-                    className={`overflow-hidden rounded-2xl border shadow-sm transition-colors ${
+                    className={`overflow-hidden rounded-3xl border shadow-sm transition-shadow hover:shadow-md ${
                       quote.isVip
-                        ? 'border-amber-400 bg-amber-50/30'
-                        : 'border-slate-200 bg-white'
+                        ? 'border-amber-400/80 bg-white ring-1 ring-amber-300/60'
+                        : 'border-slate-200/90 bg-white'
                     }`}
                   >
                     {quote.isVip && (
-                      <div className="flex items-center justify-between bg-slate-900 px-4 py-2 text-xs font-bold text-amber-300">
+                      <div className="flex items-center justify-between bg-[#0B1120] px-5 py-2.5 text-xs font-bold text-amber-300">
                         <span className="inline-flex items-center gap-1.5">
                           <Crown className="h-3.5 w-3.5 text-amber-400" />
                           <span>VIP Tərəfdaş</span>
@@ -318,10 +351,10 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
                       </div>
                     )}
 
-                    <div className="p-4 sm:p-5">
+                    <div className="p-5">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
-                          <h3 className="text-base font-extrabold text-slate-900 truncate">
+                          <h3 className="font-display text-lg font-extrabold text-slate-950 truncate">
                             {quote.shopName}
                           </h3>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-slate-600">
@@ -331,7 +364,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
                                 <span aria-hidden="true">·</span>
                               </>
                             )}
-                            <span className="text-slate-900 font-semibold">{quote.condition}</span>
+                            <span className="text-slate-950 font-semibold">{quote.condition}</span>
                             <span aria-hidden="true">·</span>
                             <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
                               <CheckCircle2 className="h-3.5 w-3.5" />
@@ -341,8 +374,8 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
                         </div>
 
                         <div className="text-right shrink-0">
-                          <div className="font-mono tabular-nums text-2xl font-extrabold text-slate-900">
-                            {quote.priceAzn} <span className="text-sm font-bold text-slate-600">AZN</span>
+                          <div className="font-display font-mono tabular-nums text-2xl sm:text-3xl font-extrabold text-slate-950">
+                            {quote.priceAzn} <span className="text-sm font-bold text-slate-500">AZN</span>
                           </div>
                           <div className="mt-0.5 text-[11px] text-slate-500">
                             {formatTimeAgoAz(quote.createdAt)}
@@ -351,7 +384,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
                       </div>
 
                       {quote.comment && (
-                        <p className="mt-3 rounded-xl bg-slate-100/80 px-3.5 py-2.5 text-xs text-slate-700">
+                        <p className="mt-3.5 rounded-2xl bg-slate-50 px-4 py-2.5 text-xs leading-relaxed text-slate-700">
                           {quote.comment}
                         </p>
                       )}
@@ -361,7 +394,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
                           href={waUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex w-full min-h-[50px] items-center justify-center gap-2 rounded-xl bg-green-700 px-4 py-3 text-sm font-bold text-white shadow-sm transition-colors hover:bg-green-800 active:scale-[0.99]"
+                          className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-green-700 px-4 py-3 text-sm font-bold text-white shadow-sm transition-colors hover:bg-green-800 active:scale-[0.985]"
                         >
                           <MessageCircle className="h-5 w-5 shrink-0" />
                           <span>WhatsApp-da yaz</span>
@@ -369,7 +402,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
 
                         <a
                           href={telUrl}
-                          className="flex w-full min-h-[50px] items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-900 shadow-sm transition-colors hover:bg-slate-50 active:scale-[0.99]"
+                          className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-900 transition-colors hover:bg-slate-100 active:scale-[0.985]"
                         >
                           <Phone className="h-5 w-5 shrink-0 text-slate-700" />
                           <span>Zəng et</span>
@@ -406,7 +439,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
             src={zoomPhoto}
             alt="Detalın böyüdülmüş şəkli"
             referrerPolicy="no-referrer"
-            className="max-h-[85vh] max-w-full rounded-xl object-contain"
+            className="max-h-[85vh] max-w-full rounded-2xl object-contain"
           />
         </div>
       )}

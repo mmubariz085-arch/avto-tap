@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
 import { triggerAlertFeedback, unlockAudio } from '../utils/notify';
+import { loadShopFeedFromPhone, saveShopFeedToPhone } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import type {
   PartAvailability,
@@ -44,7 +45,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   const [loading, setLoading] = useState<boolean>(Boolean(token));
 
   // Login state
-  const [loginPhone, setLoginPhone] = useState('+994 ');
+  const [loginPhone, setLoginPhone] = useState(() => localStorage.getItem('avtotap_shop_phone') || '+994 ');
   const [loginPin, setLoginPin] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -63,10 +64,20 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [newAlertBanner, setNewAlertBanner] = useState<string | null>(null);
 
+  // Hydrate cached feed from phone memory on mount
+  useEffect(() => {
+    if (!token) return;
+    void loadShopFeedFromPhone().then((cached) => {
+      if (!cached || !Array.isArray(cached.requests)) return;
+      setFeed((prev) => (prev.length > 0 ? prev : (cached.requests as unknown as ShopFeedItem[])));
+    });
+  }, [token]);
+
   const loadShopDashboard = useCallback(async (activeToken: string) => {
     try {
       const res = await fetch('/api/shop/me', {
         headers: { Authorization: `Bearer ${activeToken}` },
+        cache: 'no-store',
       });
       if (res.status === 401) {
         localStorage.removeItem('avtotap_shop_token');
@@ -78,9 +89,18 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       const data = await res.json();
       setShop(data.shop);
       setAdminWhatsapp(data.adminWhatsapp || '');
-      setFeed(Array.isArray(data.requests) ? data.requests : []);
+      const nextFeed: ShopFeedItem[] = Array.isArray(data.requests) ? data.requests : [];
+      setFeed(nextFeed);
+      if (data.shop?.id) {
+        void saveShopFeedToPhone({
+          shopId: data.shop.id,
+          shopName: data.shop.name,
+          requests: nextFeed as unknown as Array<Record<string, unknown>>,
+          savedAt: new Date().toISOString(),
+        });
+      }
     } catch {
-      // keep existing state if offline
+      // keep cached phone storage state if offline
     } finally {
       setLoading(false);
     }
@@ -92,7 +112,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     }
   }, [token, loadShopDashboard]);
 
-  // Open quote modal automatically if navigated via WhatsApp reply link
+  // Open quote modal automatically if navigated via notification/reply link
   useEffect(() => {
     if (!replyRequestId || feed.length === 0 || !shop?.isEffectivelyActive) return;
     const found = feed.find((item) => item.id === replyRequestId);
@@ -185,6 +205,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
         return;
       }
       localStorage.setItem('avtotap_shop_token', data.token);
+      localStorage.setItem('avtotap_shop_phone', loginPhone.trim());
       setToken(data.token);
       setShop(data.shop);
       setAdminWhatsapp(data.adminWhatsapp || '');
@@ -250,8 +271,8 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       }
 
       const savedQuote = data.quote as ShopQuote;
-      setFeed((prev) =>
-        prev.map((item) =>
+      setFeed((prev) => {
+        const next = prev.map((item) =>
           item.id === activeRequest.id
             ? {
                 ...item,
@@ -259,8 +280,17 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                 totalQuotes: item.myQuote ? item.totalQuotes : item.totalQuotes + 1,
               }
             : item
-        )
-      );
+        );
+        if (shop?.id) {
+          void saveShopFeedToPhone({
+            shopId: shop.id,
+            shopName: shop.name,
+            requests: next as unknown as Array<Record<string, unknown>>,
+            savedAt: new Date().toISOString(),
+          });
+        }
+        return next;
+      });
       triggerAlertFeedback('success', { sound: soundEnabled, vibrate: soundEnabled });
       setActiveRequest(null);
     } catch {
@@ -274,21 +304,21 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   // Login Screen
   if (!token || (!shop && !loading)) {
     return (
-      <div className="mx-auto w-full max-w-md px-4 py-8 sm:py-12">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-900 text-white">
+      <div className="mx-auto w-full max-w-md px-4 py-8 sm:py-14">
+        <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-[0_2px_10px_rgba(11,17,32,0.03),0_18px_40px_-24px_rgba(11,17,32,0.12)]">
+          <div className="flex items-center gap-3.5">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#0B1120] text-white">
               <Store className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-xl font-extrabold text-slate-900">Mağaza kabineti</h1>
-              <p className="text-xs text-slate-600">Mağaza və ya ölüxana girişi</p>
+              <h1 className="font-display text-xl font-extrabold text-slate-950">Mağaza kabineti</h1>
+              <p className="text-xs text-slate-500">Mağaza və ya ölüxana girişi</p>
             </div>
           </div>
 
           <form onSubmit={handleLogin} className="mt-6 space-y-4">
             <div>
-              <label htmlFor="shop-phone" className="block text-sm font-semibold text-slate-900">
+              <label htmlFor="shop-phone" className="block text-sm font-bold text-slate-900">
                 Telefon nömrəsi (WhatsApp)
               </label>
               <input
@@ -298,13 +328,13 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                 value={loginPhone}
                 onChange={(e) => setLoginPhone(e.target.value)}
                 placeholder="+994 50 555 10 10"
-                className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 px-4 font-mono tabular-nums text-base text-slate-900 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
+                className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
                 required
               />
             </div>
 
             <div>
-              <label htmlFor="shop-pin" className="block text-sm font-semibold text-slate-900">
+              <label htmlFor="shop-pin" className="block text-sm font-bold text-slate-900">
                 PIN kod
               </label>
               <input
@@ -314,13 +344,13 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                 value={loginPin}
                 onChange={(e) => setLoginPin(e.target.value)}
                 placeholder="Administrator tərəfindən verilən PIN"
-                className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 px-4 font-mono tabular-nums text-base text-slate-900 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
+                className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
                 required
               />
             </div>
 
             {loginError && (
-              <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+              <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
                 {loginError}
               </div>
             )}
@@ -328,7 +358,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             <button
               type="submit"
               disabled={isLoggingIn}
-              className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-base font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
+              className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-3 text-base font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
             >
               <Lock className="h-4 w-4" />
               <span>{isLoggingIn ? 'Yoxlanılır...' : 'Kabinetə daxil ol'}</span>
@@ -358,11 +388,11 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
 
     return (
       <div className="mx-auto w-full max-w-lg px-4 py-8 sm:py-12">
-        <div className="rounded-2xl border border-red-200 bg-white p-6 shadow-sm text-center">
+        <div className="rounded-3xl border border-red-200 bg-white p-7 shadow-sm text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-red-700">
             <AlertTriangle className="h-7 w-7" />
           </div>
-          <h1 className="mt-4 text-xl font-extrabold text-slate-900">
+          <h1 className="mt-4 font-display text-xl font-extrabold text-slate-950">
             {shop.isExpired ? 'Abunəlik müddətiniz bitib' : 'Hesabınız hazırda deaktivdir'}
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-slate-600">
@@ -378,7 +408,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
               href={adminWaUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex w-full min-h-[52px] items-center justify-center gap-2.5 rounded-xl bg-green-700 px-5 py-3 text-sm font-bold text-white hover:bg-green-800"
+              className="flex w-full min-h-[52px] items-center justify-center gap-2.5 rounded-2xl bg-green-700 px-5 py-3 text-sm font-bold text-white hover:bg-green-800"
             >
               <MessageCircle className="h-5 w-5" />
               <span>Abunəliyi uzatmaq üçün Admin ilə əlaqə</span>
@@ -387,7 +417,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             <button
               type="button"
               onClick={handleLogout}
-              className="flex w-full min-h-[46px] items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100"
             >
               <LogOut className="h-4 w-4" />
               <span>Çıxış et</span>
@@ -400,21 +430,21 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
 
   // Active Shop Request Feed
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 lg:py-8">
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-9">
       {/* Shop Status Bar */}
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-[#0B1120] p-5 text-white shadow-[0_14px_32px_-16px_rgba(11,17,32,0.5)]">
         <div className="min-w-0">
-          <h1 className="truncate text-lg font-extrabold text-slate-900">{shop.name}</h1>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-600">
+          <h1 className="truncate font-display text-xl font-extrabold text-white">{shop.name}</h1>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-slate-300">
             {shop.district && (
               <>
                 <span>{shop.district}</span>
                 <span aria-hidden="true">·</span>
               </>
             )}
-            <span className="font-semibold text-slate-900">{shop.tariff}</span>
+            <span className="font-semibold text-white">{shop.tariff}</span>
             <span aria-hidden="true">·</span>
-            <span className="text-emerald-700 font-semibold">Aktiv ({shop.expiresAt}-dək)</span>
+            <span className="text-emerald-400 font-semibold">Aktiv ({shop.expiresAt}-dək)</span>
           </div>
         </div>
 
@@ -424,16 +454,16 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             type="button"
             onClick={() => setSoundEnabled((v) => !v)}
             aria-label={soundEnabled ? 'Səsi söndür' : 'Səsi aç'}
-            className="flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            className="flex min-h-[42px] items-center gap-1.5 rounded-xl bg-white/10 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/20"
           >
-            {soundEnabled ? <Bell className="h-4 w-4 text-orange-700" /> : <BellOff className="h-4 w-4" />}
+            {soundEnabled ? <Bell className="h-4 w-4 text-orange-400" /> : <BellOff className="h-4 w-4 text-slate-300" />}
             <span className="hidden sm:inline">{soundEnabled ? 'Səs açıqdır' : 'Səs bağlıdır'}</span>
           </button>
 
           <button
             type="button"
             onClick={handleLogout}
-            className="flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            className="flex min-h-[42px] items-center gap-1.5 rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/20"
           >
             <LogOut className="h-4 w-4" />
             <span>Çıxış</span>
@@ -442,13 +472,13 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       </div>
 
       {newAlertBanner && (
-        <div className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-semibold text-orange-900">
+        <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3.5 text-sm font-bold text-orange-950 shadow-sm">
           <span>{newAlertBanner}</span>
           <button
             type="button"
             onClick={() => setNewAlertBanner(null)}
             aria-label="Bağla"
-            className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-orange-100"
+            className="flex h-8 w-8 items-center justify-center rounded-xl hover:bg-orange-100"
           >
             <X className="h-4 w-4" />
           </button>
@@ -456,15 +486,15 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       )}
 
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-base font-extrabold text-slate-900">
+        <h2 className="font-display text-lg font-extrabold text-slate-950">
           Gələn sorğular <span className="font-mono text-slate-500">({feed.length})</span>
         </h2>
         <span className="text-xs font-medium text-slate-500">Real vaxtda yenilənir</span>
       </div>
 
       {feed.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
-          <p className="text-base font-bold text-slate-900">Hələlik yeni sorğu yoxdur</p>
+        <div className="rounded-3xl border border-slate-200/90 bg-white p-10 text-center shadow-sm">
+          <p className="font-display text-base font-bold text-slate-950">Hələlik yeni sorğu yoxdur</p>
           <p className="mt-1.5 text-sm text-slate-600">
             Sürücülər yeni sorğu göndərən kimi avtomatik olaraq burada görünəcək.
           </p>
@@ -474,7 +504,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
           {feed.map((item) => (
             <article
               key={item.id}
-              className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm"
+              className="flex flex-col justify-between rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
             >
               <div>
                 <div className="flex items-start justify-between gap-3">
@@ -484,17 +514,17 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                       <span aria-hidden="true">·</span>
                       <span>{item.totalQuotes} cavab</span>
                     </div>
-                    <h3 className="mt-1 text-lg font-extrabold text-slate-900">
-                      {item.carBrandModel} <span className="font-mono text-slate-600">({item.year})</span>
+                    <h3 className="mt-1 font-display text-lg font-extrabold text-slate-950">
+                      {item.carBrandModel} <span className="font-mono text-slate-500">({item.year})</span>
                     </h3>
-                    <p className="mt-1 text-base font-semibold text-orange-700">{item.partName}</p>
+                    <p className="mt-1 text-base font-bold text-orange-700">{item.partName}</p>
                   </div>
 
                   {item.photoDataUrl && (
                     <button
                       type="button"
                       onClick={() => setZoomPhoto(item.photoDataUrl || null)}
-                      className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200"
+                      className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-slate-200"
                     >
                       <img
                         src={item.photoDataUrl}
@@ -507,7 +537,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                 </div>
 
                 {item.myQuote && (
-                  <div className="mt-3 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs font-semibold text-emerald-900">
+                  <div className="mt-3.5 flex items-center justify-between rounded-2xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs font-semibold text-emerald-900">
                     <span className="inline-flex items-center gap-1.5">
                       <CheckCircle2 className="h-4 w-4 text-emerald-700" />
                       <span>
@@ -520,14 +550,14 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                 )}
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-100">
+              <div className="mt-4 pt-3.5 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => openQuoteModal(item)}
-                  className={`flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-colors ${
+                  className={`flex w-full min-h-[50px] items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-bold transition-all active:scale-[0.985] ${
                     item.myQuote
-                      ? 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-50'
-                      : 'bg-orange-700 text-white hover:bg-orange-800'
+                      ? 'border border-slate-200 bg-slate-50 text-slate-900 hover:bg-slate-100'
+                      : 'bg-gradient-to-b from-orange-600 to-orange-700 text-white shadow-sm hover:from-orange-700 hover:to-orange-800'
                   }`}
                 >
                   <Send className="h-4 w-4" />
@@ -542,13 +572,14 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       {/* Quote Bottom Sheet / Modal */}
       {activeRequest && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/60 sm:p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-t-3xl sm:rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-2xl">
+          <div className="w-full max-w-md rounded-t-3xl sm:rounded-3xl border border-slate-200 bg-white p-5 sm:p-6 shadow-2xl">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-slate-500">
                   {activeRequest.carBrandModel} ({activeRequest.year})
                 </p>
-                <h3 className="mt-0.5 truncate text-lg font-extrabold text-slate-900">
+                <h3 className="mt-0.5 truncate font-display text-lg font-extrabold text-slate-950">
                   {activeRequest.partName}
                 </h3>
               </div>
@@ -564,7 +595,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
 
             <form onSubmit={handleSubmitQuote} className="mt-5 space-y-4">
               <div>
-                <label htmlFor="quote-price" className="block text-sm font-semibold text-slate-900">
+                <label htmlFor="quote-price" className="block text-sm font-bold text-slate-900">
                   Qiymət (AZN)
                 </label>
                 <input
@@ -576,23 +607,23 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                   autoFocus
                   value={priceAzn}
                   onChange={(e) => setPriceAzn(e.target.value)}
-                  placeholder="Məsələn: 120"
-                  className="mt-1.5 w-full min-h-[52px] rounded-xl border border-slate-300 px-4 font-mono text-xl font-bold text-slate-900 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
+                  placeholder="120"
+                  className="mt-1.5 w-full min-h-[54px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono text-2xl font-bold text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
                   required
                 />
               </div>
 
               <div>
-                <span className="block text-sm font-semibold text-slate-900">Detalın vəziyyəti</span>
+                <span className="block text-sm font-bold text-slate-900">Detalın vəziyyəti</span>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {CONDITIONS.map((cond) => (
                     <button
                       key={cond}
                       type="button"
                       onClick={() => setCondition(cond)}
-                      className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs font-bold transition-colors ${
+                      className={`min-h-[44px] rounded-2xl border px-2 py-2 text-xs font-bold transition-colors ${
                         condition === cond
-                          ? 'border-slate-900 bg-slate-900 text-white'
+                          ? 'border-[#0B1120] bg-[#0B1120] text-white'
                           : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
                       }`}
                     >
@@ -603,14 +634,14 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
               </div>
 
               <div>
-                <span className="block text-sm font-semibold text-slate-900">Mövcudluq</span>
+                <span className="block text-sm font-bold text-slate-900">Mövcudluq</span>
                 <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
                   {AVAILABILITIES.map((avail) => (
                     <button
                       key={avail}
                       type="button"
                       onClick={() => setAvailability(avail)}
-                      className={`min-h-[42px] rounded-xl border px-2.5 py-2 text-xs font-semibold transition-colors ${
+                      className={`min-h-[42px] rounded-2xl border px-2.5 py-2 text-xs font-semibold transition-colors ${
                         availability === avail
                           ? 'border-emerald-700 bg-emerald-700 text-white'
                           : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
@@ -623,7 +654,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
               </div>
 
               <div>
-                <label htmlFor="quote-comment" className="block text-sm font-semibold text-slate-900">
+                <label htmlFor="quote-comment" className="block text-sm font-bold text-slate-900">
                   Əlavə qeyd <span className="font-normal text-slate-500">(istəyə bağlı)</span>
                 </label>
                 <input
@@ -631,13 +662,13 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                   type="text"
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
-                  placeholder="Məsələn: Zəmanət verilir, Babək prospektindədir"
-                  className="mt-1.5 w-full min-h-[46px] rounded-xl border border-slate-300 px-3.5 text-sm text-slate-900 focus:border-orange-600 focus:outline-none"
+                  placeholder="Məsələn: Zəmanət verilir"
+                  className="mt-1.5 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 text-sm text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none"
                 />
               </div>
 
               {quoteError && (
-                <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-800">
+                <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-800">
                   {quoteError}
                 </div>
               )}
@@ -645,7 +676,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
               <button
                 type="submit"
                 disabled={isSendingQuote}
-                className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-xl bg-orange-700 px-5 py-3 text-base font-bold text-white hover:bg-orange-800 disabled:opacity-60"
+                className="flex w-full min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-orange-600 to-orange-700 px-5 py-3 text-base font-bold text-white shadow-sm hover:from-orange-700 hover:to-orange-800 disabled:opacity-60"
               >
                 <Send className="h-4 w-4" />
                 <span>{isSendingQuote ? 'Göndərilir...' : 'Qiyməti göndər'}</span>
@@ -672,7 +703,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             src={zoomPhoto}
             alt="Detalın böyüdülmüş şəkli"
             referrerPolicy="no-referrer"
-            className="max-h-[85vh] max-w-full rounded-xl object-contain"
+            className="max-h-[85vh] max-w-full rounded-2xl object-contain"
           />
         </div>
       )}

@@ -1,26 +1,37 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bot,
   ChevronDown,
   ChevronUp,
   Crown,
+  Download,
   Edit3,
   Eye,
   EyeOff,
+  HardDrive,
   KeyRound,
   LogOut,
   MessageCircle,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Shield,
   Store,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
 import { triggerAlertFeedback } from '../utils/notify';
+import {
+  type AdminPhoneBackup,
+  getPhoneStorageStats,
+  loadAdminBackupFromPhone,
+  requestPersistentPhoneStorage,
+  saveAdminBackupToPhone,
+} from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import type {
   AdminSettings,
@@ -65,6 +76,16 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   });
   const [loading, setLoading] = useState<boolean>(Boolean(token));
 
+  // Phone storage backup state
+  const [phoneBackup, setPhoneBackup] = useState<AdminPhoneBackup | null>(null);
+  const [storageStats, setStorageStats] = useState<{ persisted: boolean; usedKb: number }>({
+    persisted: false,
+    usedKb: 0,
+  });
+  const [storageFeedback, setStorageFeedback] = useState<string | null>(null);
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
   // Add/Edit Shop Modal
   const [showShopModal, setShowShopModal] = useState(false);
   const [editingShopId, setEditingShopId] = useState<string | null>(null);
@@ -97,29 +118,60 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   const [expandedReqId, setExpandedReqId] = useState<string | null>(null);
   const [adminAlertBanner, setAdminAlertBanner] = useState<string | null>(null);
 
-  const fetchDashboard = useCallback(async (activeToken: string) => {
-    try {
-      const res = await fetch('/api/admin/dashboard', {
-        headers: { Authorization: `Bearer ${activeToken}` },
-      });
-      if (res.status === 401) {
-        localStorage.removeItem('avtotap_admin_token');
-        setToken(null);
-        return;
-      }
-      const data = await res.json();
-      setShops(Array.isArray(data.shops) ? data.shops : []);
-      setRequests(Array.isArray(data.requests) ? data.requests : []);
-      if (data.settings) {
-        setSettings(data.settings);
-        setAdminWaInput(data.settings.adminWhatsapp || '');
-      }
-    } catch {
-      // ignore transient network issue
-    } finally {
-      setLoading(false);
-    }
+  const refreshPhoneStorageInfo = useCallback(async () => {
+    const [backup, stats] = await Promise.all([
+      loadAdminBackupFromPhone(),
+      getPhoneStorageStats(),
+    ]);
+    setPhoneBackup(backup);
+    setStorageStats(stats);
   }, []);
+
+  useEffect(() => {
+    void requestPersistentPhoneStorage().then(() => refreshPhoneStorageInfo());
+  }, [refreshPhoneStorageInfo]);
+
+  const fetchDashboard = useCallback(
+    async (activeToken: string, forceSaveEmpty = false) => {
+      try {
+        const res = await fetch('/api/admin/dashboard', {
+          headers: { Authorization: `Bearer ${activeToken}` },
+          cache: 'no-store',
+        });
+        if (res.status === 401) {
+          localStorage.removeItem('avtotap_admin_token');
+          setToken(null);
+          return;
+        }
+        const data = await res.json();
+        const nextShops: AdminShopRow[] = Array.isArray(data.shops) ? data.shops : [];
+        const nextRequests: RequestWithQuotes[] = Array.isArray(data.requests) ? data.requests : [];
+        const nextSettings: AdminSettings = data.settings || settings;
+
+        setShops(nextShops);
+        setRequests(nextRequests);
+        if (data.settings) {
+          setSettings(nextSettings);
+          setAdminWaInput(nextSettings.adminWhatsapp || '');
+        }
+
+        // Preserve existing phone backup if server booted empty unless explicit edit occurred
+        const existingPhoneBackup = await loadAdminBackupFromPhone();
+        if (nextShops.length > 0 || forceSaveEmpty || !existingPhoneBackup?.shops.length) {
+          const saved = await saveAdminBackupToPhone(nextShops, nextSettings);
+          setPhoneBackup(saved);
+        } else {
+          setPhoneBackup(existingPhoneBackup);
+        }
+        setStorageStats(await getPhoneStorageStats());
+      } catch {
+        // ignore transient network issue
+      } finally {
+        setLoading(false);
+      }
+    },
+    [settings]
+  );
 
   useEffect(() => {
     if (token) {
@@ -240,6 +292,88 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     setRequests([]);
   };
 
+  const handleManualSaveToPhone = async () => {
+    const saved = await saveAdminBackupToPhone(shops, settings);
+    setPhoneBackup(saved);
+    setStorageStats(await getPhoneStorageStats());
+    setStorageFeedback('Məlumatlar telefon yaddaşına yazıldı');
+    setTimeout(() => setStorageFeedback(null), 2500);
+  };
+
+  const handleRestoreFromBackupData = async (backup: AdminPhoneBackup) => {
+    if (!token) return;
+    setIsRestoringBackup(true);
+    setStorageFeedback(null);
+    try {
+      const res = await fetch('/api/admin/restore-snapshot', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          shops: backup.shops,
+          adminWhatsapp: backup.adminWhatsapp,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setStorageFeedback(data.error || 'Bərpa alınmadı.');
+        return;
+      }
+      setStorageFeedback(`Telefon yaddaşından ${data.restoredCount} mağaza bərpa edildi`);
+      setTimeout(() => setStorageFeedback(null), 3500);
+      await fetchDashboard(token, true);
+    } catch {
+      setStorageFeedback('Bərpa zamanı şəbəkə xətası.');
+    } finally {
+      setIsRestoringBackup(false);
+    }
+  };
+
+  const handleExportJson = () => {
+    const backup = {
+      shops: shops.map((s) => ({
+        id: s.id,
+        name: s.name,
+        district: s.district,
+        whatsapp: s.whatsapp,
+        telegramChatId: s.telegramChatId,
+        pin: s.pin,
+        tariff: s.tariff,
+        expiresAt: s.expiresAt,
+        status: s.status,
+        createdAt: s.createdAt,
+      })),
+      adminWhatsapp: settings.adminWhatsapp,
+      savedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `avtotap-yedek-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as AdminPhoneBackup;
+      if (!parsed || !Array.isArray(parsed.shops)) {
+        setStorageFeedback('Yedək faylı düzgün formatda deyil.');
+        return;
+      }
+      await handleRestoreFromBackupData(parsed);
+    } catch {
+      setStorageFeedback('Faylı oxumaq mümkün olmadı.');
+    }
+  };
+
   const handleFetchTelegramUpdates = async (openPanel = true) => {
     if (!token) return;
     if (openPanel) setTgPanelOpen(true);
@@ -289,7 +423,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         body: JSON.stringify({ telegramChatId: chatId }),
       });
       if (res.ok) {
-        await fetchDashboard(token);
+        await fetchDashboard(token, true);
       }
     } finally {
       setBindingChatId(null);
@@ -355,7 +489,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         return;
       }
       setShowShopModal(false);
-      await fetchDashboard(token);
+      await fetchDashboard(token, true);
     } catch {
       setShopFormError('Şəbəkə xətası.');
     } finally {
@@ -375,7 +509,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         },
         body: JSON.stringify({ status: nextStatus }),
       });
-      await fetchDashboard(token);
+      await fetchDashboard(token, true);
     } catch {
       // ignore
     }
@@ -388,7 +522,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
-      setShops((prev) => prev.filter((s) => s.id !== shopId));
+      await fetchDashboard(token, true);
     } catch {
       // ignore
     }
@@ -422,7 +556,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       if (res.ok) {
         setSettingsSavedMsg('Yadda saxlandı');
         setTimeout(() => setSettingsSavedMsg(null), 2500);
-        await fetchDashboard(token);
+        await fetchDashboard(token, true);
       }
     } catch {
       // ignore
@@ -461,26 +595,26 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         <button
           type="button"
           onClick={onExitAdmin}
-          className="mb-4 inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900"
+          className="mb-4 inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950"
         >
           <ArrowLeft className="h-4 w-4" />
           <span>Sürücü ekranına qayıt</span>
         </button>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-900 text-amber-400">
+        <div className="rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-7 shadow-[0_2px_10px_rgba(11,17,32,0.03),0_18px_40px_-24px_rgba(11,17,32,0.12)]">
+          <div className="flex items-center gap-3.5">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#0B1120] text-amber-400">
               <Shield className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-xl font-extrabold text-slate-900">Admin panel</h1>
+              <h1 className="font-display text-xl font-extrabold text-slate-950">Admin panel</h1>
               <p className="text-xs text-slate-500">Yalnız sistem sahibi üçün qapalı giriş</p>
             </div>
           </div>
 
           <form onSubmit={handleLogin} className="mt-6 space-y-4">
             <div>
-              <label htmlFor="admin-password" className="block text-sm font-semibold text-slate-900">
+              <label htmlFor="admin-password" className="block text-sm font-bold text-slate-900">
                 Admin şifrəsi
               </label>
               <div className="relative mt-1.5">
@@ -493,25 +627,22 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Şifrəni daxil edin"
-                  className="w-full min-h-[48px] rounded-xl border border-slate-300 pl-4 pr-12 text-base text-slate-900 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/15"
+                  className="w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 pl-4 pr-12 text-base text-slate-950 transition-colors focus:border-slate-950 focus:bg-white focus:outline-none focus:ring-4 focus:ring-slate-900/10"
                   required
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
                   aria-label={showPassword ? 'Şifrəni gizlət' : 'Şifrəni göstər'}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-900"
                 >
                   {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                 </button>
               </div>
-              <p className="mt-1.5 text-xs text-slate-500">
-                Şifrə serverin <span className="font-mono">ADMIN_PASSWORD</span> ayarı üzrə yoxlanılır.
-              </p>
             </div>
 
             {loginError && (
-              <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+              <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
                 {loginError}
               </div>
             )}
@@ -519,7 +650,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
             <button
               type="submit"
               disabled={isLoggingIn}
-              className="flex w-full min-h-[50px] items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+              className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
             >
               <KeyRound className="h-4 w-4" />
               <span>{isLoggingIn ? 'Yoxlanılır...' : 'Daxil ol'}</span>
@@ -530,10 +661,13 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     );
   }
 
+  const canOfferOneTapRestore =
+    shops.length === 0 && Boolean(phoneBackup && phoneBackup.shops.length > 0);
+
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 lg:py-8">
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-9">
       {/* Header */}
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-900 p-4 text-white shadow-sm">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-[#0B1120] p-5 text-white shadow-[0_14px_32px_-16px_rgba(11,17,32,0.5)]">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -544,7 +678,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div>
-            <h1 className="text-lg font-extrabold">Admin İdarəetmə Paneli</h1>
+            <h1 className="font-display text-lg font-extrabold">Admin İdarəetmə Paneli</h1>
             <p className="text-xs text-slate-300">
               {shops.length} mağaza · {requests.length} sorğu
             </p>
@@ -567,14 +701,14 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       {adminAlertBanner && (
         <div
           role="status"
-          className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-bold text-orange-900"
+          className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3.5 text-sm font-bold text-orange-950 shadow-sm"
         >
           <span>{adminAlertBanner}</span>
           <button
             type="button"
             onClick={() => setAdminAlertBanner(null)}
             aria-label="Bağla"
-            className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-orange-100"
+            className="flex h-8 w-8 items-center justify-center rounded-xl hover:bg-orange-100"
           >
             <X className="h-4 w-4" />
           </button>
@@ -583,14 +717,14 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
       {/* Tab Navigation */}
       <div className="mb-6 flex items-center justify-between gap-3 flex-wrap">
-        <div className="inline-flex rounded-xl bg-slate-200/80 p-1">
+        <div className="inline-flex rounded-2xl bg-slate-200/80 p-1">
           <button
             type="button"
             onClick={() => setActiveTab('shops')}
-            className={`min-h-[42px] rounded-lg px-5 py-2 text-sm font-bold transition-colors whitespace-nowrap ${
+            className={`min-h-[42px] rounded-xl px-5 py-2 text-sm font-bold transition-colors whitespace-nowrap ${
               activeTab === 'shops'
-                ? 'bg-white text-slate-900 shadow-sm'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-white text-slate-950 shadow-sm'
+                : 'text-slate-600 hover:text-slate-950'
             }`}
           >
             Mağazalar ({shops.length})
@@ -598,10 +732,10 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
           <button
             type="button"
             onClick={() => setActiveTab('requests')}
-            className={`min-h-[42px] rounded-lg px-5 py-2 text-sm font-bold transition-colors whitespace-nowrap ${
+            className={`min-h-[42px] rounded-xl px-5 py-2 text-sm font-bold transition-colors whitespace-nowrap ${
               activeTab === 'requests'
-                ? 'bg-white text-slate-900 shadow-sm'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-white text-slate-950 shadow-sm'
+                : 'text-slate-600 hover:text-slate-950'
             }`}
           >
             Sorğular ({requests.length})
@@ -614,7 +748,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
               type="button"
               onClick={() => void handleFetchTelegramUpdates(true)}
               disabled={tgLoading}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50 whitespace-nowrap disabled:opacity-60"
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50 whitespace-nowrap disabled:opacity-60"
             >
               <RefreshCw className={`h-4 w-4 text-sky-700 ${tgLoading ? 'animate-spin' : ''}`} />
               <span>Telegram-dan yenilə</span>
@@ -623,7 +757,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
             <button
               type="button"
               onClick={() => openCreateShop('')}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-orange-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-orange-800 whitespace-nowrap"
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-2xl bg-gradient-to-b from-orange-600 to-orange-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:from-orange-700 hover:to-orange-800 whitespace-nowrap"
             >
               <Plus className="h-4 w-4" />
               <span>Yeni mağaza əlavə et</span>
@@ -636,14 +770,37 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         <p className="py-10 text-center text-sm text-slate-600">Yüklənir...</p>
       ) : activeTab === 'shops' ? (
         <div className="space-y-6">
+          {/* Prompt to restore from phone storage if server is empty and phone has backup */}
+          {canOfferOneTapRestore && phoneBackup && (
+            <section className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-amber-300 bg-amber-50 p-5 shadow-sm">
+              <div>
+                <h2 className="font-display text-base font-extrabold text-slate-950">
+                  Telefon yaddaşında {phoneBackup.shops.length} mağaza tapıldı
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-700">
+                  Son saxlanma: {new Date(phoneBackup.savedAt).toLocaleString('az-AZ')}. Bir toxunuşla bərpa edə bilərsiniz.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isRestoringBackup}
+                onClick={() => void handleRestoreFromBackupData(phoneBackup)}
+                className="inline-flex min-h-[46px] items-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-2.5 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <RotateCcw className="h-4 w-4" />
+                <span>{isRestoringBackup ? 'Bərpa edilir...' : 'Telefon yaddaşından bərpa et'}</span>
+              </button>
+            </section>
+          )}
+
           {/* Telegram Subscribers Picker Panel */}
           {tgPanelOpen && (
-            <section className="rounded-2xl border border-sky-200 bg-white p-4 sm:p-5 shadow-sm">
+            <section className="rounded-3xl border border-sky-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5">
                   <Bot className="h-5 w-5 text-sky-700" />
                   <div>
-                    <h2 className="text-sm font-extrabold text-slate-900">
+                    <h2 className="font-display text-sm font-extrabold text-slate-950">
                       Botda Start basanlar (Telegram Chat ID)
                     </h2>
                     <p className="text-xs text-slate-500">
@@ -655,7 +812,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                   type="button"
                   onClick={() => setTgPanelOpen(false)}
                   aria-label="Bağla"
-                  className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -664,7 +821,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
               {tgLoading ? (
                 <p className="mt-4 text-xs text-slate-600">Telegram-dan siyahı yüklənir...</p>
               ) : tgError ? (
-                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-800">
+                <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-800">
                   {tgError}
                 </div>
               ) : tgSubscribers.length === 0 ? (
@@ -681,7 +838,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         className="flex flex-wrap items-center justify-between gap-3 py-3"
                       >
                         <div className="min-w-0">
-                          <p className="text-sm font-bold text-slate-900">
+                          <p className="text-sm font-bold text-slate-950">
                             {sub.displayName}{' '}
                             {sub.username && (
                               <span className="font-normal text-sky-700">@{sub.username}</span>
@@ -704,7 +861,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                                     [sub.chatId]: e.target.value,
                                   }))
                                 }
-                                className="min-h-[40px] rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800"
+                                className="min-h-[40px] rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800"
                               >
                                 {shops.map((sh) => (
                                   <option key={sh.id} value={sh.id}>
@@ -716,7 +873,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                                 type="button"
                                 disabled={bindingChatId === sub.chatId}
                                 onClick={() => void handleBindTelegramToShop(sub.chatId)}
-                                className="min-h-[40px] rounded-xl bg-slate-900 px-3.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+                                className="min-h-[40px] rounded-xl bg-[#0B1120] px-3.5 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-60"
                               >
                                 {bindingChatId === sub.chatId ? 'Bağlanır...' : 'Mağazaya bağla'}
                               </button>
@@ -725,7 +882,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                           <button
                             type="button"
                             onClick={() => openCreateShop(sub.chatId)}
-                            className="min-h-[40px] rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-bold text-slate-800 hover:bg-slate-100"
+                            className="min-h-[40px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-800 hover:bg-slate-100"
                           >
                             + Yeni mağaza
                           </button>
@@ -738,76 +895,14 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
             </section>
           )}
 
-          {/* Admin Contact & Telegram Status Settings */}
-          <form
-            onSubmit={handleSaveSettings}
-            className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-          >
-            <div className="flex-1 min-w-[220px]">
-              <label htmlFor="admin-wa-setting" className="block text-xs font-bold text-slate-700">
-                Admin WhatsApp nömrəsi (abunəliyi bitən mağazalar üçün)
-              </label>
-              <input
-                id="admin-wa-setting"
-                type="tel"
-                value={adminWaInput}
-                onChange={(e) => setAdminWaInput(e.target.value)}
-                className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 font-mono text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-              />
-            </div>
-            <button
-              type="submit"
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800"
-            >
-              <Save className="h-4 w-4" />
-              <span>{settingsSavedMsg || 'Yadda saxla'}</span>
-            </button>
-            <div className="w-full text-xs text-slate-500">
-              Telegram Bot statusu:{' '}
-              <strong className={settings.telegramBotConfigured ? 'text-emerald-700' : 'text-amber-700'}>
-                {settings.telegramBotConfigured
-                  ? 'Aktivdir (TELEGRAM_BOT_TOKEN qoşulub — yeni sorğular mağazaların Telegram-ına göndərilir)'
-                  : 'TELEGRAM_BOT_TOKEN təyin edilməyib (Secrets bölməsində əlavə edin)'}
-              </strong>
-            </div>
-          </form>
-
-          <form
-            onSubmit={handleChangeAdminPassword}
-            className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-          >
-            <div className="flex-1 min-w-[220px]">
-              <label htmlFor="new-admin-pw" className="block text-xs font-bold text-slate-700">
-                Admin şifrəsini dəyiş (minimum 6 simvol)
-              </label>
-              <input
-                id="new-admin-pw"
-                type="text"
-                autoCapitalize="none"
-                autoCorrect="off"
-                value={newAdminPassword}
-                onChange={(e) => setNewAdminPassword(e.target.value)}
-                placeholder="Yeni şifrəni daxil edin"
-                className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 font-mono text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-              />
-            </div>
-            <button
-              type="submit"
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-900 hover:bg-slate-100"
-            >
-              <KeyRound className="h-4 w-4" />
-              <span>Şifrəni yenilə</span>
-            </button>
-            {passwordChangeMsg && (
-              <p className="w-full text-xs font-semibold text-emerald-700">{passwordChangeMsg}</p>
-            )}
-          </form>
-
           {/* Shops Grid */}
           {shops.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
-              <Store className="mx-auto h-8 w-8 text-slate-400" />
-              <p className="mt-2 text-sm font-bold text-slate-900">Hələlik mağaza əlavə olunmayıb</p>
+            <div className="rounded-3xl border border-slate-200/90 bg-white p-9 text-center shadow-sm">
+              <Store className="mx-auto h-9 w-9 text-slate-400" />
+              <p className="mt-3 font-display text-base font-bold text-slate-950">Hələlik mağaza əlavə olunmayıb</p>
+              <p className="mt-1 text-xs text-slate-500">
+                «Yeni mağaza əlavə et» düyməsi ilə ilk mağazanızı əlavə edin.
+              </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -819,9 +914,9 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                 return (
                   <article
                     key={shop.id}
-                    className={`rounded-2xl border p-4 sm:p-5 shadow-sm ${
+                    className={`rounded-3xl border p-5 shadow-sm transition-shadow hover:shadow-md ${
                       shop.status === 'Aktiv'
-                        ? 'border-slate-200 bg-white'
+                        ? 'border-slate-200/90 bg-white'
                         : 'border-slate-200 bg-slate-100/70'
                     }`}
                   >
@@ -831,7 +926,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                           {shop.tariff === 'VIP 40 AZN' && (
                             <Crown className="h-4 w-4 shrink-0 text-amber-600" />
                           )}
-                          <h3 className="truncate text-base font-extrabold text-slate-900">
+                          <h3 className="truncate font-display text-base font-extrabold text-slate-950">
                             {shop.name}
                           </h3>
                         </div>
@@ -861,7 +956,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                       </button>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3 text-xs border border-slate-100 sm:grid-cols-4">
+                    <div className="mt-4 grid grid-cols-2 gap-2.5 rounded-2xl bg-slate-50 p-3.5 text-xs border border-slate-100 sm:grid-cols-4">
                       <div>
                         <span className="block text-slate-500">WhatsApp</span>
                         <span className="font-mono font-semibold text-slate-900 break-all">
@@ -899,7 +994,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         href={inviteWaUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex flex-1 min-h-[42px] items-center justify-center gap-1.5 rounded-xl bg-green-700 px-3 py-2 text-xs font-bold text-white hover:bg-green-800"
+                        className="inline-flex flex-1 min-h-[44px] items-center justify-center gap-1.5 rounded-2xl bg-green-700 px-3 py-2 text-xs font-bold text-white hover:bg-green-800"
                       >
                         <MessageCircle className="h-4 w-4" />
                         <span>PIN-i WhatsApp-a at</span>
@@ -909,7 +1004,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         type="button"
                         onClick={() => openEditShop(shop)}
                         aria-label="Redaktə et"
-                        className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        className="inline-flex min-h-[44px] items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                       >
                         <Edit3 className="h-4 w-4" />
                         <span>Düzəliş</span>
@@ -919,7 +1014,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         type="button"
                         onClick={() => void handleDeleteShop(shop.id)}
                         aria-label="Sil"
-                        className="inline-flex min-h-[42px] min-w-[42px] items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-2xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -929,13 +1024,152 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
               })}
             </div>
           )}
+
+          {/* Phone Storage & Backup Control Panel */}
+          <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-800">
+                  <HardDrive className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="font-display text-sm font-extrabold text-slate-950">
+                    Telefon yaddaşı (IndexedDB)
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    {storageStats.persisted ? 'Qorunan daimi yaddaş' : 'Yerli brauzer yaddaşı'} ·{' '}
+                    <span className="font-mono tabular-nums">
+                      {phoneBackup?.shops.length ?? 0} mağaza · {storageStats.usedKb} KB
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleManualSaveToPhone()}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#0B1120] px-3.5 text-xs font-bold text-white hover:bg-slate-800"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  <span>Telefona yaz</span>
+                </button>
+
+                {phoneBackup && phoneBackup.shops.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={isRestoringBackup}
+                    onClick={() => void handleRestoreFromBackupData(phoneBackup)}
+                    className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-800 hover:bg-slate-100 disabled:opacity-60"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span>Bərpa et</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleExportJson}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Yedəyi yüklə</span>
+                </button>
+
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={handleImportJson}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => importFileRef.current?.click()}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  <span>Fayldan bərpa</span>
+                </button>
+              </div>
+            </div>
+
+            {storageFeedback && (
+              <p className="text-xs font-semibold text-emerald-700">{storageFeedback}</p>
+            )}
+          </section>
+
+          {/* Admin Contact & Telegram Status Settings */}
+          <form
+            onSubmit={handleSaveSettings}
+            className="flex flex-wrap items-end gap-3 rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm"
+          >
+            <div className="flex-1 min-w-[220px]">
+              <label htmlFor="admin-wa-setting" className="block text-xs font-bold text-slate-700">
+                Admin WhatsApp nömrəsi (abunəliyi bitən mağazalar üçün)
+              </label>
+              <input
+                id="admin-wa-setting"
+                type="tel"
+                value={adminWaInput}
+                onChange={(e) => setAdminWaInput(e.target.value)}
+                className="mt-1.5 w-full min-h-[46px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 font-mono text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
+              />
+            </div>
+            <button
+              type="submit"
+              className="inline-flex min-h-[46px] items-center gap-1.5 rounded-2xl bg-[#0B1120] px-4 py-2 text-xs font-bold text-white hover:bg-slate-800"
+            >
+              <Save className="h-4 w-4" />
+              <span>{settingsSavedMsg || 'Yadda saxla'}</span>
+            </button>
+            <div className="w-full text-xs text-slate-500">
+              Telegram Bot statusu:{' '}
+              <strong className={settings.telegramBotConfigured ? 'text-emerald-700' : 'text-amber-700'}>
+                {settings.telegramBotConfigured
+                  ? 'Aktivdir (TELEGRAM_BOT_TOKEN qoşulub — yeni sorğular mağazaların Telegram-ına göndərilir)'
+                  : 'TELEGRAM_BOT_TOKEN təyin edilməyib (Secrets bölməsində əlavə edin)'}
+              </strong>
+            </div>
+          </form>
+
+          <form
+            onSubmit={handleChangeAdminPassword}
+            className="flex flex-wrap items-end gap-3 rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm"
+          >
+            <div className="flex-1 min-w-[220px]">
+              <label htmlFor="new-admin-pw" className="block text-xs font-bold text-slate-700">
+                Admin şifrəsini dəyiş (minimum 6 simvol)
+              </label>
+              <input
+                id="new-admin-pw"
+                type="text"
+                autoCapitalize="none"
+                autoCorrect="off"
+                value={newAdminPassword}
+                onChange={(e) => setNewAdminPassword(e.target.value)}
+                placeholder="Yeni şifrəni daxil edin"
+                className="mt-1.5 w-full min-h-[46px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 font-mono text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
+              />
+            </div>
+            <button
+              type="submit"
+              className="inline-flex min-h-[46px] items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-900 hover:bg-slate-100"
+            >
+              <KeyRound className="h-4 w-4" />
+              <span>Şifrəni yenilə</span>
+            </button>
+            {passwordChangeMsg && (
+              <p className="w-full text-xs font-semibold text-emerald-700">{passwordChangeMsg}</p>
+            )}
+          </form>
         </div>
       ) : (
         /* Requests Tab */
         <div className="space-y-4">
           {requests.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
-              <p className="text-base font-bold text-slate-900">Hələlik sürücü sorğusu yoxdur</p>
+            <div className="rounded-3xl border border-slate-200/90 bg-white p-10 text-center shadow-sm">
+              <p className="font-display text-base font-bold text-slate-950">Hələlik sürücü sorğusu yoxdur</p>
             </div>
           ) : (
             requests.map((reqItem) => {
@@ -943,7 +1177,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
               return (
                 <article
                   key={reqItem.id}
-                  className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm"
+                  className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div className="flex items-start gap-3.5 min-w-0 flex-1">
@@ -952,7 +1186,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                           src={reqItem.photoDataUrl}
                           alt={reqItem.partName}
                           referrerPolicy="no-referrer"
-                          className="h-16 w-16 shrink-0 rounded-xl border border-slate-200 object-cover"
+                          className="h-16 w-16 shrink-0 rounded-2xl border border-slate-200 object-cover"
                         />
                       )}
                       <div className="min-w-0">
@@ -961,10 +1195,10 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                           <span aria-hidden="true">·</span>
                           <span>{formatTimeAgoAz(reqItem.createdAt)}</span>
                         </div>
-                        <h3 className="mt-1 text-base font-extrabold text-slate-900">
-                          {reqItem.carBrandModel} <span className="font-mono text-slate-600">({reqItem.year})</span>
+                        <h3 className="mt-1 font-display text-base font-extrabold text-slate-950">
+                          {reqItem.carBrandModel} <span className="font-mono text-slate-500">({reqItem.year})</span>
                         </h3>
-                        <p className="text-sm font-semibold text-orange-700">{reqItem.partName}</p>
+                        <p className="text-sm font-bold text-orange-700">{reqItem.partName}</p>
                         <p className="mt-1 font-mono text-xs text-slate-600">
                           Sürücü: {reqItem.driverWhatsapp}
                         </p>
@@ -975,7 +1209,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                       <button
                         type="button"
                         onClick={() => setExpandedReqId(isExpanded ? null : reqItem.id)}
-                        className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-800 hover:bg-slate-100"
+                        className="inline-flex min-h-[42px] items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-800 hover:bg-slate-100"
                       >
                         <span>Cavablar ({reqItem.quoteCount})</span>
                         {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -984,7 +1218,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                       <button
                         type="button"
                         onClick={() => void handleDeleteSpamRequest(reqItem.id)}
-                        className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
+                        className="inline-flex min-h-[42px] items-center gap-1.5 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
                       >
                         <Trash2 className="h-4 w-4" />
                         <span>Spamı sil</span>
@@ -1000,17 +1234,17 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         reqItem.quotes.map((q) => (
                           <div
                             key={q.id}
-                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3.5 py-2.5 text-xs"
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-50 px-4 py-2.5 text-xs"
                           >
                             <div>
-                              <span className="font-bold text-slate-900">{q.shopName}</span>
+                              <span className="font-bold text-slate-950">{q.shopName}</span>
                               {q.isVip && <span className="ml-2 font-bold text-amber-700">VIP</span>}
                               <span className="mx-2 text-slate-400">·</span>
                               <span className="text-slate-600">
                                 {q.condition} · {q.availability}
                               </span>
                             </div>
-                            <span className="font-mono font-extrabold text-slate-900">
+                            <span className="font-mono font-extrabold text-slate-950">
                               {q.priceAzn} AZN
                             </span>
                           </div>
@@ -1028,9 +1262,10 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       {/* Add / Edit Shop Modal */}
       {showShopModal && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/60 sm:p-4 backdrop-blur-sm">
-          <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl sm:rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-2xl">
+          <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl sm:rounded-3xl border border-slate-200 bg-white p-5 sm:p-6 shadow-2xl">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-extrabold text-slate-900">
+              <h2 className="font-display text-lg font-extrabold text-slate-950">
                 {editingShopId ? 'Mağazanı redaktə et' : 'Yeni mağaza əlavə et'}
               </h2>
               <button
@@ -1050,8 +1285,8 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                   type="text"
                   value={shopName}
                   onChange={(e) => setShopName(e.target.value)}
-                  placeholder="Məsələn: Babək Avto Hissələri"
-                  className="mt-1 w-full min-h-[46px] rounded-xl border border-slate-300 px-3.5 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+                  placeholder="Məsələn: Avto Zapçast"
+                  className="mt-1 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
                   required
                 />
               </div>
@@ -1064,7 +1299,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                     value={shopDistrict}
                     onChange={(e) => setShopDistrict(e.target.value)}
                     placeholder="Məsələn: Mərkəzi küçə 15"
-                    className="mt-1 w-full min-h-[46px] rounded-xl border border-slate-300 px-3.5 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+                    className="mt-1 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
                   />
                 </div>
                 <div>
@@ -1074,7 +1309,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                     value={shopWhatsapp}
                     onChange={(e) => setShopWhatsapp(e.target.value)}
                     placeholder="+994 50 123 45 67"
-                    className="mt-1 w-full min-h-[46px] rounded-xl border border-slate-300 px-3.5 font-mono text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+                    className="mt-1 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 font-mono text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
                     required
                   />
                 </div>
@@ -1100,7 +1335,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                   value={shopTelegramChatId}
                   onChange={(e) => setShopTelegramChatId(e.target.value)}
                   placeholder="Məsələn: 123456789"
-                  className="mt-1 w-full min-h-[46px] rounded-xl border border-slate-300 px-3.5 font-mono text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+                  className="mt-1 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 font-mono text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
                 />
 
                 {tgSubscribers.length > 0 && (
@@ -1110,7 +1345,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         key={sub.chatId}
                         type="button"
                         onClick={() => setShopTelegramChatId(sub.chatId)}
-                        className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                        className={`rounded-xl border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
                           shopTelegramChatId === sub.chatId
                             ? 'border-sky-700 bg-sky-700 text-white'
                             : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
@@ -1131,7 +1366,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                     value={shopPin}
                     onChange={(e) => setShopPin(e.target.value)}
                     placeholder="4 rəqəmli kod"
-                    className="mt-1 w-full min-h-[46px] rounded-xl border border-slate-300 px-3.5 font-mono text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+                    className="mt-1 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 font-mono text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
                     required
                   />
                 </div>
@@ -1141,7 +1376,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                     type="date"
                     value={shopExpiresAt}
                     onChange={(e) => setShopExpiresAt(e.target.value)}
-                    className="mt-1 w-full min-h-[46px] rounded-xl border border-slate-300 px-3.5 font-mono text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+                    className="mt-1 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 font-mono text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
                     required
                   />
                 </div>
@@ -1155,9 +1390,9 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                       key={t}
                       type="button"
                       onClick={() => setShopTariff(t)}
-                      className={`min-h-[42px] rounded-xl border px-2 py-2 text-xs font-bold transition-colors ${
+                      className={`min-h-[44px] rounded-2xl border px-2 py-2 text-xs font-bold transition-colors ${
                         shopTariff === t
-                          ? 'border-slate-900 bg-slate-900 text-white'
+                          ? 'border-[#0B1120] bg-[#0B1120] text-white'
                           : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
                       }`}
                     >
@@ -1175,7 +1410,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                       key={st}
                       type="button"
                       onClick={() => setShopStatus(st)}
-                      className={`min-h-[42px] rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${
+                      className={`min-h-[44px] rounded-2xl border px-3 py-2 text-xs font-bold transition-colors ${
                         shopStatus === st
                           ? st === 'Aktiv'
                             ? 'border-emerald-700 bg-emerald-700 text-white'
@@ -1190,7 +1425,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
               </div>
 
               {shopFormError && (
-                <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-800">
+                <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-semibold text-red-800">
                   {shopFormError}
                 </div>
               )}
@@ -1198,7 +1433,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
               <button
                 type="submit"
                 disabled={isSavingShop}
-                className="flex w-full min-h-[50px] items-center justify-center gap-2 rounded-xl bg-orange-700 px-5 py-3 text-sm font-bold text-white hover:bg-orange-800 disabled:opacity-60"
+                className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-orange-600 to-orange-700 px-5 py-3 text-sm font-bold text-white shadow-sm hover:from-orange-700 hover:to-orange-800 disabled:opacity-60"
               >
                 <Save className="h-4 w-4" />
                 <span>{isSavingShop ? 'Saxlanılır...' : 'Yadda saxla'}</span>

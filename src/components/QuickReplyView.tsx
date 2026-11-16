@@ -185,17 +185,17 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
   if (!request || !shop) return null;
 
   return (
-    <div className="mx-auto w-full max-w-lg px-4 py-5 sm:py-8 space-y-4">
+    <div className="mx-auto w-full max-w-lg px-4 py-6 sm:py-9 space-y-4">
       {/* Shop identity bar */}
-      <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="flex items-center justify-between rounded-3xl bg-[#0B1120] px-5 py-4 text-white shadow-md">
         <div className="min-w-0">
-          <p className="truncate text-sm font-extrabold text-slate-900">{shop.name}</p>
-          <p className="text-xs text-slate-500">Telegram sürətli cavab səhifəsi</p>
+          <p className="truncate font-display text-base font-extrabold text-white">{shop.name}</p>
+          <p className="text-xs text-slate-300">Telegram sürətli cavab səhifəsi</p>
         </div>
         <button
           type="button"
           onClick={() => onOpenFullShopCabinet(shopToken)}
-          className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-100 shrink-0"
+          className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-white/10 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-white/20 shrink-0"
         >
           <Store className="h-4 w-4" />
           <span>Bütün sorğular</span>
@@ -203,14 +203,14 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
       </div>
 
       {/* Driver Request Card */}
-      <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <article className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
               <span>{formatTimeAgoAz(request.createdAt)}</span>
             </div>
-            <h1 className="mt-1 text-xl font-extrabold text-slate-900">
-              {request.carBrandModel} <span className="font-mono text-slate-600">({request.year})</span>
+            <h1 className="mt-1 font-display text-xl font-extrabold text-slate-950">
+              {request.carBrandModel} <span className="font-mono text-slate-500">({request.year})</span>
             </h1>
             <p className="mt-1 text-base font-bold text-orange-700">{request.partName}</p>
           </div>
@@ -219,7 +219,7 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
             <button
               type="button"
               onClick={() => setZoomPhoto(request.photoDataUrl || null)}
-              className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200"
+              className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-slate-200"
             >
               <img
                 src={request.photoDataUrl}
@@ -234,27 +234,27 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
 
       {/* Success Banner or Form */}
       {justSubmitted && sentQuote ? (
-        <div className="rounded-2xl border border-emerald-200 bg-white p-6 text-center shadow-sm">
+        <div className="rounded-3xl border border-emerald-200 bg-white p-6 text-center shadow-sm">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
             <CheckCircle2 className="h-7 w-7" />
           </div>
-          <h2 className="mt-3 text-lg font-extrabold text-slate-900">Cavabınız sürücüyə göndərildi!</h2>
+          <h2 className="mt-3 font-display text-lg font-extrabold text-slate-950">Cavabınız sürücüyə göndərildi!</h2>
           <p className="mt-1 text-sm text-slate-600">
-            <strong className="font-mono text-slate-900">{sentQuote.priceAzn} AZN</strong> · {sentQuote.condition} ·{' '}
+            <strong className="font-mono text-slate-950">{sentQuote.priceAzn} AZN</strong> · {sentQuote.condition} ·{' '}
             {sentQuote.availability}
           </p>
           <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
             <button
               type="button"
               onClick={() => setJustSubmitted(false)}
-              className="min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold text-slate-800 hover:bg-slate-50"
+              className="min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-bold text-slate-800 hover:bg-slate-100"
             >
               Qiyməti dəyiş
             </button>
             <button
               type="button"
               onClick={() => onOpenFullShopCabinet(shopToken)}
-              className="min-h-[48px] rounded-xl bg-slate-900 px-4 text-sm font-bold text-white hover:bg-slate-800"
+              className="min-h-[48px] rounded-2xl bg-[#0B1120] px-4 text-sm font-bold text-white hover:bg-slate-800"
             >
               Mağaza kabineti
             </button>
@@ -263,7 +263,7 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
       ) : (
         <form
           onSubmit={handleSubmit}
-          className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4"
+          className="rounded-3xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-sm space-y-4"
         >
           <div>
             <label htmlFor="quick-price" className="block text-sm font-bold text-slate-900">
@@ -277,8 +277,8 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
               min="1"
               value={priceAzn}
               onChange={(e) => setPriceAzn(e.target.value)}
-              placeholder="Məsələn: 120"
-              className="mt-1.5 w-full min-h-[52px] rounded-xl border border-slate-300 px-4 font-mono text-xl font-bold text-slate-900 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
+              placeholder="120"
+              className="mt-1.5 w-full min-h-[54px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono text-2xl font-bold text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
               required
             />
           </div>

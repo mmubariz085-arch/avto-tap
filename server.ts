@@ -119,32 +119,7 @@ function createInitialDb(): DbSchema {
     settings: {
       adminWhatsapp: '+994 50 777 00 00',
     },
-    shops: [
-      {
-        id: 'shop_babek_vip',
-        name: 'Babək Avto Zapçast',
-        district: '',
-        whatsapp: '+994 50 555 10 10',
-        telegramChatId: '',
-        pin: '1111',
-        tariff: 'VIP 40 AZN',
-        expiresAt: futureYmd(365),
-        status: 'Aktiv',
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: 'shop_sumqayit_oluxana',
-        name: 'Avto Ölüxana Mərkəzi',
-        district: '',
-        whatsapp: '+994 55 444 20 20',
-        telegramChatId: '',
-        pin: '2222',
-        tariff: 'Bazis 25 AZN',
-        expiresAt: futureYmd(365),
-        status: 'Aktiv',
-        createdAt: new Date().toISOString(),
-      },
-    ],
+    shops: [],
     requests: [],
     quotes: [],
     pushSubscriptions: [],
@@ -805,7 +780,7 @@ async function startServer() {
 
     const token = signToken({
       role: 'admin',
-      exp: Date.now() + 1000 * 60 * 60 * 12,
+      exp: Date.now() + 1000 * 60 * 60 * 24 * 30,
     });
 
     res.json({ token });
@@ -1078,6 +1053,55 @@ async function startServer() {
     db.settings.adminPasswordHash = hashAdminPassword(newPassword);
     saveDb(db);
     res.json({ ok: true });
+  });
+
+  app.post('/api/admin/restore-snapshot', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const { shops, adminWhatsapp } = req.body ?? {};
+    const validTariffs: ShopTariff[] = ['Test', 'Bazis 25 AZN', 'VIP 40 AZN'];
+    let restoredCount = 0;
+
+    if (typeof adminWhatsapp === 'string' && normalizePhoneDigits(adminWhatsapp).length >= 9) {
+      db.settings.adminWhatsapp = formatDisplayPhone(adminWhatsapp);
+    }
+
+    if (Array.isArray(shops)) {
+      const existingIds = new Set(db.shops.map((s) => s.id));
+      for (const raw of shops) {
+        if (!raw || typeof raw !== 'object') continue;
+        const name = String(raw.name || '').trim();
+        const whatsapp = String(raw.whatsapp || '').trim();
+        const pin = String(raw.pin || '').trim();
+        if (!name || normalizePhoneDigits(whatsapp).length < 9 || pin.length < 4) continue;
+        const id =
+          typeof raw.id === 'string' && raw.id.trim()
+            ? raw.id.trim().slice(0, 80)
+            : `shop_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+        if (existingIds.has(id)) continue;
+
+        const restoredShop: Shop = {
+          id,
+          name: name.slice(0, 100),
+          district: typeof raw.district === 'string' && raw.district.trim() ? raw.district.trim().slice(0, 80) : undefined,
+          whatsapp: formatDisplayPhone(whatsapp),
+          telegramChatId: typeof raw.telegramChatId === 'string' ? raw.telegramChatId.trim().slice(0, 40) : '',
+          pin: pin.slice(0, 12),
+          tariff: validTariffs.includes(raw.tariff) ? raw.tariff : 'Bazis 25 AZN',
+          expiresAt:
+            typeof raw.expiresAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.expiresAt)
+              ? raw.expiresAt
+              : futureYmd(30),
+          status: raw.status === 'Deaktiv' ? 'Deaktiv' : 'Aktiv',
+          createdAt: typeof raw.createdAt === 'string' && raw.createdAt ? raw.createdAt : new Date().toISOString(),
+        };
+        db.shops.push(restoredShop);
+        existingIds.add(id);
+        restoredCount++;
+      }
+    }
+
+    saveDb(db);
+    res.json({ ok: true, restoredCount, totalShops: db.shops.length });
   });
 
   const server = http.createServer(app);

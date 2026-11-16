@@ -3,6 +3,7 @@ import { Camera, Check, ChevronRight, ImagePlus, QrCode, Send, Trash2, X } from 
 import { QRCodeSVG } from 'qrcode.react';
 import { compressImageFile } from '../utils/phone';
 import { subscribePushNotifications, triggerAlertFeedback, unlockAudio } from '../utils/notify';
+import { saveOrderSnapshotToPhone } from '../utils/phoneStorage';
 import type { LegalDocType } from './LegalModal';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import type { RequestWithQuotes } from '../types';
@@ -184,6 +185,7 @@ export const DriverView: React.FC<DriverViewProps> = ({
           }
 
           localStorage.setItem('avtotap_driver_phone', cleanPhone);
+          void saveOrderSnapshotToPhone(data.request);
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             void subscribePushNotifications({
               role: 'driver',
@@ -212,20 +214,20 @@ export const DriverView: React.FC<DriverViewProps> = ({
   const currentUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 lg:py-8">
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-9">
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-start">
         {/* Primary Form Column */}
         <div className="lg:col-span-7">
-          <div className="mb-5">
-            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
+          <div className="mb-6">
+            <h1 className="font-display text-[26px] font-extrabold leading-tight tracking-tight text-slate-950 sm:text-4xl text-balance">
               Bütün mağazalara 1 sorğu göndər
             </h1>
-            <p className="mt-1.5 text-sm text-slate-600">
+            <p className="mt-2 text-sm sm:text-base text-slate-600 leading-relaxed">
               {activeShopCount > 0
                 ? `${activeShopCount} aktiv mağaza və ölüxana sorğunuza real vaxtda qiymət göndərəcək.`
                 : 'Yerli ehtiyat hissəsi mağazalarından və ölüxanalardan dərhal qiymət alın.'}
             </p>
-            <div className="mt-3">
+            <div className="mt-3.5">
               <PushNotificationsButton role="driver" />
             </div>
           </div>
@@ -233,14 +235,14 @@ export const DriverView: React.FC<DriverViewProps> = ({
           <form
             noValidate
             onSubmit={handleSubmit}
-            className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 space-y-5"
+            className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-[0_2px_10px_rgba(11,17,32,0.03),0_18px_40px_-24px_rgba(11,17,32,0.12)] sm:p-7 space-y-5"
           >
             {/* Brand & Model */}
             <div>
-              <label htmlFor="car-brand-input" className="block text-sm font-semibold text-slate-900">
+              <label htmlFor="car-brand-input" className="block text-sm font-bold text-slate-900">
                 Avtomobilin marka və modeli
               </label>
-              <div className="mt-2 flex flex-wrap gap-2">
+              <div className="mt-2.5 flex flex-wrap gap-2">
                 {POPULAR_BRANDS.map((brand) => {
                   const isSelected = carBrandModel.toLowerCase().startsWith(brand.toLowerCase());
                   return (
@@ -248,10 +250,10 @@ export const DriverView: React.FC<DriverViewProps> = ({
                       key={brand}
                       type="button"
                       onClick={() => handleSelectBrand(brand)}
-                      className={`min-h-[40px] rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                      className={`min-h-[40px] rounded-xl border px-3.5 py-1.5 text-xs font-semibold transition-all duration-150 whitespace-nowrap shrink-0 ${
                         isSelected
-                          ? 'border-slate-900 bg-slate-900 text-white'
-                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100'
+                          ? 'border-[#0B1120] bg-[#0B1120] text-white shadow-sm'
+                          : 'border-slate-200 bg-slate-50/80 text-slate-700 hover:border-slate-300 hover:bg-slate-100'
                       }`}
                     >
                       {brand}
@@ -266,44 +268,45 @@ export const DriverView: React.FC<DriverViewProps> = ({
                 value={carBrandModel}
                 onChange={(e) => setCarBrandModel(e.target.value)}
                 placeholder="Məsələn: Mercedes E-Class W211"
-                className="mt-2.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 text-base text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
+                className="mt-3 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 text-base text-slate-950 placeholder:text-slate-400 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
               />
             </div>
 
-            {/* Year */}
-            <div>
-              <label htmlFor="car-year-input" className="block text-sm font-semibold text-slate-900">
-                Buraxılış ili
-              </label>
-              <input
-                id="car-year-input"
-                type="text"
-                inputMode="numeric"
-                value={year}
-                onChange={(e) => setYear(e.target.value.replace(/[^\d]/g, '').slice(0, 4))}
-                placeholder="Məsələn: 2014"
-                className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 font-mono tabular-nums text-base text-slate-900 placeholder:font-sans placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
-              />
-            </div>
+            {/* Year + Part row on wider mobile/tablet */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="sm:col-span-1">
+                <label htmlFor="car-year-input" className="block text-sm font-bold text-slate-900">
+                  Buraxılış ili
+                </label>
+                <input
+                  id="car-year-input"
+                  type="text"
+                  inputMode="numeric"
+                  value={year}
+                  onChange={(e) => setYear(e.target.value.replace(/[^\d]/g, '').slice(0, 4))}
+                  placeholder="2014"
+                  className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base font-semibold text-slate-950 placeholder:font-sans placeholder:font-normal placeholder:text-slate-400 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                />
+              </div>
 
-            {/* Part Name */}
-            <div>
-              <label htmlFor="part-name-input" className="block text-sm font-semibold text-slate-900">
-                Lazım olan detalın adı
-              </label>
-              <input
-                id="part-name-input"
-                type="text"
-                value={partName}
-                onChange={(e) => setPartName(e.target.value)}
-                placeholder="Məsələn: Ön sağ fara, su radiatoru, arxa bufer"
-                className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 text-base text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
-              />
+              <div className="sm:col-span-2">
+                <label htmlFor="part-name-input" className="block text-sm font-bold text-slate-900">
+                  Lazım olan detalın adı
+                </label>
+                <input
+                  id="part-name-input"
+                  type="text"
+                  value={partName}
+                  onChange={(e) => setPartName(e.target.value)}
+                  placeholder="Ön sağ fara, su radiatoru, arxa bufer"
+                  className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 text-base text-slate-950 placeholder:text-slate-400 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                />
+              </div>
             </div>
 
             {/* Optional Photo Upload */}
             <div>
-              <span className="block text-sm font-semibold text-slate-900">
+              <span className="block text-sm font-bold text-slate-900">
                 Detalın şəkli <span className="font-normal text-slate-500">(istəyə bağlı)</span>
               </span>
               <input
@@ -328,33 +331,33 @@ export const DriverView: React.FC<DriverViewProps> = ({
                     type="button"
                     disabled={isCompressing}
                     onClick={() => cameraInputRef.current?.click()}
-                    className="flex min-h-[52px] items-center justify-center gap-2 rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-100 active:scale-[0.99]"
+                    className="flex min-h-[54px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm font-semibold text-slate-800 transition-all hover:border-slate-300 hover:bg-slate-100 active:scale-[0.98]"
                   >
-                    <Camera className="h-5 w-5 text-orange-700 shrink-0" />
+                    <Camera className="h-5 w-5 text-orange-600 shrink-0" />
                     <span className="truncate">Kameradan çək</span>
                   </button>
                   <button
                     type="button"
                     disabled={isCompressing}
                     onClick={() => galleryInputRef.current?.click()}
-                    className="flex min-h-[52px] items-center justify-center gap-2 rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-100 active:scale-[0.99]"
+                    className="flex min-h-[54px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm font-semibold text-slate-800 transition-all hover:border-slate-300 hover:bg-slate-100 active:scale-[0.98]"
                   >
                     <ImagePlus className="h-5 w-5 text-slate-700 shrink-0" />
                     <span className="truncate">Qalereyadan seç</span>
                   </button>
                 </div>
               ) : (
-                <div className="mt-2 relative overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                <div className="mt-2 relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
                   <img
                     src={photoDataUrl}
                     alt="Detalın yüklənmiş şəkli"
                     referrerPolicy="no-referrer"
-                    className="h-44 w-full object-cover"
+                    className="h-48 w-full object-cover"
                   />
                   <button
                     type="button"
                     onClick={() => setPhotoDataUrl(undefined)}
-                    className="absolute right-2.5 top-2.5 inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-slate-950/80 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-sm hover:bg-slate-950"
+                    className="absolute right-3 top-3 inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-slate-950/85 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md hover:bg-slate-950"
                   >
                     <Trash2 className="h-4 w-4" />
                     <span>Şəkli sil</span>
@@ -368,7 +371,7 @@ export const DriverView: React.FC<DriverViewProps> = ({
 
             {/* Driver WhatsApp */}
             <div>
-              <label htmlFor="driver-whatsapp" className="block text-sm font-semibold text-slate-900">
+              <label htmlFor="driver-whatsapp" className="block text-sm font-bold text-slate-900">
                 WhatsApp nömrəniz
               </label>
               <input
@@ -378,14 +381,14 @@ export const DriverView: React.FC<DriverViewProps> = ({
                 value={driverWhatsapp}
                 onChange={(e) => setDriverWhatsapp(e.target.value)}
                 placeholder="+994 50 123 45 67"
-                className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 font-mono tabular-nums text-base text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
+                className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base font-medium text-slate-950 placeholder:text-slate-400 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
               />
             </div>
 
-            {/* Terms Checkbox (full row clickable) */}
+            {/* Terms Checkbox */}
             <div
               onClick={() => setAcceptedTerms((v) => !v)}
-              className="flex cursor-pointer items-start gap-3 rounded-xl p-2 -mx-2 hover:bg-slate-50 select-none"
+              className="flex cursor-pointer items-start gap-3 rounded-2xl p-2.5 -mx-2.5 transition-colors hover:bg-slate-50 select-none"
             >
               <button
                 type="button"
@@ -398,7 +401,7 @@ export const DriverView: React.FC<DriverViewProps> = ({
                 className="flex h-7 w-7 min-h-[44px] min-w-[44px] -ml-1 -my-1.5 items-center justify-center rounded-xl transition-colors shrink-0"
               >
                 <span
-                  className={`flex h-6 w-6 items-center justify-center rounded-md border transition-colors ${
+                  className={`flex h-6 w-6 items-center justify-center rounded-lg border transition-colors ${
                     acceptedTerms
                       ? 'border-orange-700 bg-orange-700 text-white'
                       : 'border-slate-400 bg-white text-transparent'
@@ -434,7 +437,7 @@ export const DriverView: React.FC<DriverViewProps> = ({
             </div>
 
             {errorMsg && (
-              <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+              <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
                 {errorMsg}
               </div>
             )}
@@ -442,7 +445,7 @@ export const DriverView: React.FC<DriverViewProps> = ({
             <button
               type="submit"
               disabled={isSubmitting || isCompressing}
-              className="flex w-full min-h-[54px] items-center justify-center gap-2.5 rounded-xl bg-orange-700 px-6 py-3.5 text-base font-bold text-white shadow-sm transition-all hover:bg-orange-800 active:scale-[0.99] disabled:opacity-60"
+              className="flex w-full min-h-[56px] items-center justify-center gap-2.5 rounded-2xl bg-gradient-to-b from-orange-600 to-orange-700 px-6 py-3.5 text-base font-bold text-white shadow-[0_10px_24px_-8px_rgba(194,65,12,0.48)] transition-all hover:from-orange-700 hover:to-orange-800 active:scale-[0.985] disabled:opacity-60"
             >
               <Send className="h-5 w-5" />
               <span>{isSubmitting ? 'Sorğu göndərilir...' : 'Sorğu göndər'}</span>
@@ -450,24 +453,27 @@ export const DriverView: React.FC<DriverViewProps> = ({
           </form>
         </div>
 
-        {/* Right / Secondary Column: Saved Orders + How it Works + QR Share */}
-        <div className="space-y-5 lg:col-span-5">
+        {/* Right / Secondary Column */}
+        <div className="space-y-5 lg:col-span-5 lg:pt-2">
           {savedOrders.length > 0 && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
-              <h2 className="text-sm font-bold text-slate-900">Son sifarişləriniz</h2>
+            <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <h2 className="font-display text-base font-bold text-slate-950">Son sifarişləriniz</h2>
+                <span className="font-mono text-xs text-slate-500">{savedOrders.length} ədəd</span>
+              </div>
               <div className="mt-3 divide-y divide-slate-100">
                 {savedOrders.map((item) => (
                   <button
                     key={item.id}
                     type="button"
                     onClick={() => onOpenOrder(item.id)}
-                    className="flex w-full min-h-[56px] items-center justify-between gap-3 py-3 text-left transition-colors hover:bg-slate-50 rounded-lg px-2 -mx-2"
+                    className="flex w-full min-h-[60px] items-center justify-between gap-3 py-3 text-left transition-colors hover:bg-slate-50 rounded-xl px-2.5 -mx-2.5"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">
-                        {item.carBrandModel} · <span className="font-mono">{item.year}</span>
+                      <p className="truncate text-sm font-bold text-slate-950">
+                        {item.carBrandModel} · <span className="font-mono text-slate-600">{item.year}</span>
                       </p>
-                      <p className="truncate text-xs text-slate-600">{item.partName}</p>
+                      <p className="truncate text-xs font-medium text-orange-700 mt-0.5">{item.partName}</p>
                     </div>
                     <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
                   </button>
@@ -476,34 +482,34 @@ export const DriverView: React.FC<DriverViewProps> = ({
             </section>
           )}
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 space-y-4">
-            <h2 className="text-sm font-bold text-slate-900">Necə işləyir?</h2>
-            <ol className="space-y-3 text-sm text-slate-600">
-              <li className="flex items-start gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 font-mono text-xs font-bold text-white">
-                  1
+          <section className="rounded-3xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-sm space-y-5">
+            <h2 className="font-display text-base font-bold text-slate-950">Necə işləyir?</h2>
+            <ol className="space-y-4 text-sm text-slate-600 leading-relaxed">
+              <li className="flex items-start gap-3.5">
+                <span className="font-mono text-xs font-bold text-orange-700 pt-0.5 shrink-0">
+                  01.
                 </span>
-                <span>Avtomobilinizi və lazım olan detalı yazın, istəsəniz şəklini çəkin.</span>
+                <span>Avtomobilinizi və lazım olan detalı yazın, istəsəniz şəklini əlavə edin.</span>
               </li>
-              <li className="flex items-start gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 font-mono text-xs font-bold text-white">
-                  2
+              <li className="flex items-start gap-3.5">
+                <span className="font-mono text-xs font-bold text-orange-700 pt-0.5 shrink-0">
+                  02.
                 </span>
-                <span>Sorğu bütün aktiv mağazalara və avtoölüxanalara dərhal çatır.</span>
+                <span>Sorğu bütün aktiv mağazalara və avtoölüxanalara dərhal bildirişlə çatır.</span>
               </li>
-              <li className="flex items-start gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 font-mono text-xs font-bold text-white">
-                  3
+              <li className="flex items-start gap-3.5">
+                <span className="font-mono text-xs font-bold text-orange-700 pt-0.5 shrink-0">
+                  03.
                 </span>
-                <span>Qiymətlər ekranda canlı görünür — bəyəndiyiniz mağazaya bir toxunuşla WhatsApp-da yazın.</span>
+                <span>Qiymətlər telefonunuzda canlı görünür — bəyəndiyiniz mağazaya WhatsApp-da yazın.</span>
               </li>
             </ol>
 
-            <div className="pt-2 border-t border-slate-100">
+            <div className="pt-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setShowQrModal(true)}
-                className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                className="flex w-full min-h-[46px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/90 px-4 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:bg-slate-100"
               >
                 <QrCode className="h-4 w-4 text-slate-700" />
                 <span>Tətbiqi QR kod ilə paylaş</span>
@@ -514,27 +520,28 @@ export const DriverView: React.FC<DriverViewProps> = ({
       </div>
 
       {showQrModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl text-center">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/60 sm:p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-t-3xl sm:rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl text-center">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-900">QR kod ilə aç</h3>
+              <h3 className="font-display text-base font-bold text-slate-950">QR kod ilə aç</h3>
               <button
                 type="button"
                 onClick={() => setShowQrModal(false)}
                 aria-label="Bağla"
-                className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+                className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="mt-4 flex justify-center rounded-xl border border-slate-200 bg-white p-5">
+            <div className="mt-4 flex justify-center rounded-2xl border border-slate-200 bg-slate-50 p-5">
               <QRCodeSVG value={currentUrl || 'https://avtotap.az'} size={180} />
             </div>
             <p className="mt-3 text-xs text-slate-600 break-all">{currentUrl}</p>
             <button
               type="button"
               onClick={() => setShowQrModal(false)}
-              className="mt-5 w-full min-h-[46px] rounded-xl bg-slate-900 text-sm font-semibold text-white hover:bg-slate-800"
+              className="mt-5 w-full min-h-[48px] rounded-2xl bg-[#0B1120] text-sm font-bold text-white hover:bg-slate-800"
             >
               Bağla
             </button>
