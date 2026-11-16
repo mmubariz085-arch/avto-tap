@@ -1,0 +1,33 @@
+{
+  "authSecret": "a4c5675248e65f4696d0dfa3af58a6b2dab4b02c7efced11fa6e9440580133ff",
+  "settings": {
+    "adminWhatsapp": "+994 50 777 00 00"
+  },
+  "shops": [
+    {
+      "id": "shop_babek_vip",
+      "name": "Babək Avto Zapçast",
+      "district": "Bakı · Babək pr.",
+      "whatsapp": "+994 50 555 10 10",
+      "pin": "1111",
+      "tariff": "VIP 40 AZN",
+      "expiresAt": "2027-11-16",
+      "status": "Aktiv",
+      "createdAt": "2026-11-16T14:45:06.443Z",
+      "telegramChatId": ""
+    },
+    {
+      "id": "shop_sumqayit_oluxana",
+      "name": "Sumqayıt Ölüxana",
+      "district": "Sumqayıt",
+      "whatsapp": "+994 55 444 20 20",
+      "pin": "2222",
+      "tariff": "Bazis 25 AZN",
+      "expiresAt": "2027-11-16",
+      "status": "Aktiv",
+      "createdAt": "2026-11-16T14:45:06.443Z"
+    }
+  ],
+  "requests": [],
+  "quotes": []
+}

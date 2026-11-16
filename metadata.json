@@ -1,0 +1,6 @@
+{
+  "name": "AvtoTap",
+  "description": "Rayon üzrə avtomobil ehtiyat hissələrinin mağazalardan və ölüxanalardan sürətli tapılması üçün mobil PWA platforması.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
