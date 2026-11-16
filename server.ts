@@ -34,6 +34,7 @@ interface DbSchema {
   authSecret: string;
   settings: {
     adminWhatsapp: string;
+    adminPasswordHash?: string;
   };
   shops: Shop[];
   requests: PartRequest[];
@@ -145,6 +146,7 @@ function loadDb(): DbSchema {
       authSecret: parsed.authSecret || initial.authSecret,
       settings: {
         adminWhatsapp: parsed.settings?.adminWhatsapp || initial.settings.adminWhatsapp,
+        adminPasswordHash: parsed.settings?.adminPasswordHash,
       },
       shops: Array.isArray(parsed.shops) ? parsed.shops : initial.shops,
       requests: Array.isArray(parsed.requests) ? parsed.requests : [],
@@ -165,6 +167,22 @@ function saveDb(data: DbSchema): void {
 }
 
 let db: DbSchema = loadDb();
+
+function hashAdminPassword(pw: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(pw, salt, 32).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyAdminPassword(pw: string, stored: string): boolean {
+  const parts = stored.split(':');
+  if (parts.length !== 2) return false;
+  const [salt, hexHash] = parts;
+  const derived = crypto.scryptSync(pw, salt, 32);
+  const storedBuf = Buffer.from(hexHash, 'hex');
+  if (derived.length !== storedBuf.length) return false;
+  return crypto.timingSafeEqual(derived, storedBuf);
+}
 
 function signToken(payload: Record<string, unknown>): string {
   const body = Buffer.from(JSON.stringify(payload), 'utf-8').toString('base64url');
@@ -590,13 +608,26 @@ async function startServer() {
   // Admin login
   app.post('/api/admin/login', (req, res) => {
     const { password } = req.body ?? {};
-    const expected = process.env.ADMIN_PASSWORD || 'AvtoTapAdmin2026';
-    const given = String(password || '');
+    const given = String(password || '').trim();
 
-    const givenBuf = Buffer.from(given);
-    const expectedBuf = Buffer.from(expected);
+    let isValid = false;
+    if (db.settings.adminPasswordHash) {
+      isValid = verifyAdminPassword(given, db.settings.adminPasswordHash);
+    } else {
+      let rawExpected = String(process.env.ADMIN_PASSWORD || '').trim();
+      if (
+        (rawExpected.startsWith('"') && rawExpected.endsWith('"')) ||
+        (rawExpected.startsWith("'") && rawExpected.endsWith("'"))
+      ) {
+        rawExpected = rawExpected.slice(1, -1).trim();
+      }
+      const expected = rawExpected || 'AvtoTapAdmin2026';
+      const givenBuf = Buffer.from(given);
+      const expectedBuf = Buffer.from(expected);
+      isValid = givenBuf.length === expectedBuf.length && crypto.timingSafeEqual(givenBuf, expectedBuf);
+    }
 
-    if (givenBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(givenBuf, expectedBuf)) {
+    if (!isValid) {
       res.status(401).json({ error: 'Admin şifrəsi yanlışdır.' });
       return;
     }
@@ -858,7 +889,24 @@ async function startServer() {
       db.settings.adminWhatsapp = formatDisplayPhone(adminWhatsapp);
       saveDb(db);
     }
-    res.json({ settings: db.settings });
+    res.json({
+      settings: {
+        adminWhatsapp: db.settings.adminWhatsapp,
+        telegramBotConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim()),
+      },
+    });
+  });
+
+  app.patch('/api/admin/password', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const newPassword = String(req.body?.newPassword || '').trim();
+    if (newPassword.length < 6) {
+      res.status(400).json({ error: 'Yeni şifrə ən azı 6 simvol olmalıdır.' });
+      return;
+    }
+    db.settings.adminPasswordHash = hashAdminPassword(newPassword);
+    saveDb(db);
+    res.json({ ok: true });
   });
 
   if (!IS_PROD) {

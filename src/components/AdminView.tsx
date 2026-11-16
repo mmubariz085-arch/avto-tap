@@ -6,6 +6,8 @@ import {
   ChevronUp,
   Crown,
   Edit3,
+  Eye,
+  EyeOff,
   KeyRound,
   LogOut,
   MessageCircle,
@@ -48,6 +50,7 @@ function defaultExpiryDate(): string {
 export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('avtotap_admin_token'));
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
@@ -85,6 +88,8 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   // Settings edit
   const [adminWaInput, setAdminWaInput] = useState('');
   const [settingsSavedMsg, setSettingsSavedMsg] = useState<string | null>(null);
+  const [newAdminPassword, setNewAdminPassword] = useState('');
+  const [passwordChangeMsg, setPasswordChangeMsg] = useState<string | null>(null);
 
   // Expanded request quotes
   const [expandedReqId, setExpandedReqId] = useState<string | null>(null);
@@ -399,6 +404,32 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     }
   };
 
+  const handleChangeAdminPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !newAdminPassword.trim()) return;
+    setPasswordChangeMsg(null);
+    try {
+      const res = await fetch('/api/admin/password', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ newPassword: newAdminPassword.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPasswordChangeMsg(data.error || 'Şifrə dəyişdirilmədi.');
+        return;
+      }
+      setNewAdminPassword('');
+      setPasswordChangeMsg('Yeni şifrə yadda saxlandı');
+      setTimeout(() => setPasswordChangeMsg(null), 3000);
+    } catch {
+      setPasswordChangeMsg('Şəbəkə xətası.');
+    }
+  };
+
   if (!token) {
     return (
       <div className="mx-auto w-full max-w-md px-4 py-8 sm:py-14">
@@ -427,15 +458,31 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
               <label htmlFor="admin-password" className="block text-sm font-semibold text-slate-900">
                 Admin şifrəsi
               </label>
-              <input
-                id="admin-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Şifrəni daxil edin"
-                className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 px-4 text-base text-slate-900 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/15"
-                required
-              />
+              <div className="relative mt-1.5">
+                <input
+                  id="admin-password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Şifrəni daxil edin"
+                  className="w-full min-h-[48px] rounded-xl border border-slate-300 pl-4 pr-12 text-base text-slate-900 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/15"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? 'Şifrəni gizlət' : 'Şifrəni göstər'}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                >
+                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-500">
+                Şifrə serverin <span className="font-mono">ADMIN_PASSWORD</span> ayarı üzrə yoxlanılır.
+              </p>
             </div>
 
             {loginError && (
@@ -678,6 +725,37 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                   : 'TELEGRAM_BOT_TOKEN təyin edilməyib (Secrets bölməsində əlavə edin)'}
               </strong>
             </div>
+          </form>
+
+          <form
+            onSubmit={handleChangeAdminPassword}
+            className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+          >
+            <div className="flex-1 min-w-[220px]">
+              <label htmlFor="new-admin-pw" className="block text-xs font-bold text-slate-700">
+                Admin şifrəsini dəyiş (minimum 6 simvol)
+              </label>
+              <input
+                id="new-admin-pw"
+                type="text"
+                autoCapitalize="none"
+                autoCorrect="off"
+                value={newAdminPassword}
+                onChange={(e) => setNewAdminPassword(e.target.value)}
+                placeholder="Yeni şifrəni daxil edin"
+                className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 font-mono text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+              />
+            </div>
+            <button
+              type="submit"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-900 hover:bg-slate-100"
+            >
+              <KeyRound className="h-4 w-4" />
+              <span>Şifrəni yenilə</span>
+            </button>
+            {passwordChangeMsg && (
+              <p className="w-full text-xs font-semibold text-emerald-700">{passwordChangeMsg}</p>
+            )}
           </form>
 
           {/* Shops Grid */}
