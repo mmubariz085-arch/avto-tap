@@ -45,7 +45,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ doc, onClose }) => {
             <>
               <p className="font-semibold text-slate-900">1. Ümumi müddəalar</p>
               <p>
-                AvtoTap platforması sürücülər ilə rayon üzrə fəaliyyət göstərən avtomobil ehtiyat hissələri
+                Şərur AvtoZapcast platforması sürücülər ilə rayon üzrə fəaliyyət göstərən avtomobil ehtiyat hissələri
                 mağazaları və avtoölüxanalar arasında sürətli məlumat mübadiləsini təmin edən rəqəmsal vasitədir.
               </p>
               <p className="font-semibold text-slate-900">2. Xidmətin iş prinsipi</p>

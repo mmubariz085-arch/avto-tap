@@ -118,12 +118,41 @@ async function idbSet<T>(key: string, value: T): Promise<void> {
   });
 }
 
+async function idbDelete(key: string): Promise<void> {
+  try {
+    localStorage.removeItem(`avtotap_idb_${key}`);
+  } catch {
+    // ignore
+  }
+  const db = await openPhoneDb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE_KV, 'readwrite');
+      const store = tx.objectStore(STORE_KV);
+      store.delete(key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
 export async function saveOrderSnapshotToPhone(order: RequestWithQuotes): Promise<void> {
   await idbSet(`order_${order.id}`, order);
 }
 
 export async function loadOrderSnapshotFromPhone(orderId: string): Promise<RequestWithQuotes | null> {
   return idbGet<RequestWithQuotes>(`order_${orderId}`);
+}
+
+export async function deleteOrderSnapshotFromPhone(orderId: string): Promise<void> {
+  await idbDelete(`order_${orderId}`);
+}
+
+export async function clearAllOrderSnapshotsFromPhone(orderIds: string[]): Promise<void> {
+  await Promise.all(orderIds.map((id) => idbDelete(`order_${id}`)));
 }
 
 export async function saveShopFeedToPhone(cache: ShopPhoneCache): Promise<void> {

@@ -14,6 +14,7 @@ import {
   LogOut,
   MessageCircle,
   Plus,
+  QrCode,
   RefreshCw,
   RotateCcw,
   Save,
@@ -33,6 +34,7 @@ import {
   saveAdminBackupToPhone,
 } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
+import { QrPosterModal } from './QrPosterModal';
 import type {
   AdminSettings,
   RequestWithQuotes,
@@ -117,6 +119,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   // Expanded request quotes
   const [expandedReqId, setExpandedReqId] = useState<string | null>(null);
   const [adminAlertBanner, setAdminAlertBanner] = useState<string | null>(null);
+  const [showQrModal, setShowQrModal] = useState(false);
 
   const refreshPhoneStorageInfo = useCallback(async () => {
     const [backup, stats] = await Promise.all([
@@ -352,7 +355,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `avtotap-yedek-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `serur-avtozapcast-yedek-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -746,6 +749,15 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
+              onClick={() => setShowQrModal(true)}
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50 whitespace-nowrap"
+            >
+              <QrCode className="h-4 w-4 text-orange-600" />
+              <span>QR kart (Çap et)</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => void handleFetchTelegramUpdates(true)}
               disabled={tgLoading}
               className="inline-flex min-h-[44px] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50 whitespace-nowrap disabled:opacity-60"
@@ -908,7 +920,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               {shops.map((shop) => {
                 const appOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-                const inviteText = `Salam! "${shop.name}" mağazası AvtoTap sisteminə qoşuldu.\nKabinet linki: ${appOrigin}/?tab=shop\nTelefon: ${shop.whatsapp}\nPIN kod: ${shop.pin}\nTarif: ${shop.tariff} (${shop.expiresAt}-dək)`;
+                const inviteText = `Salam! "${shop.name}" mağazası Şərur AvtoZapcast sisteminə qoşuldu.\nKabinet linki: ${appOrigin}/?tab=shop\nTelefon: ${shop.whatsapp}\nPIN kod: ${shop.pin}\nTarif: ${shop.tariff} (${shop.expiresAt}-dək)`;
                 const inviteWaUrl = buildWhatsAppUrl(shop.whatsapp, inviteText);
 
                 return (
@@ -1442,6 +1454,8 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
           </div>
         </div>
       )}
+
+      <QrPosterModal open={showQrModal} onClose={() => setShowQrModal(false)} />
     </div>
   );
 };

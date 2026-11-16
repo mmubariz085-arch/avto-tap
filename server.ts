@@ -1175,7 +1175,7 @@ async function startServer() {
   });
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`AvtoTap server running at http://0.0.0.0:${PORT}`);
+    console.log(`Şərur AvtoZapcast server running at http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -322,7 +322,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
             <div className="space-y-4">
               {order.quotes.map((quote) => {
                 const waText = [
-                  `Salam, ${quote.shopName}! AvtoTap üzərindən cavabınızı gördüm.`,
+                  `Salam, ${quote.shopName}! Şərur AvtoZapcast üzərindən cavabınızı gördüm.`,
                   `Avtomobil: ${order.carBrandModel} (${order.year})`,
                   `Detal: ${order.partName}`,
                   `Təklif olunan qiymət: ${quote.priceAzn} AZN (${quote.condition}, ${quote.availability})`,

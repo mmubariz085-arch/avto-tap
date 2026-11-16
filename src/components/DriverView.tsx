@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, Check, ChevronRight, ImagePlus, QrCode, Send, Trash2, X } from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
+import { Camera, Check, ChevronRight, ImagePlus, QrCode, Send, Trash2 } from 'lucide-react';
 import { compressImageFile } from '../utils/phone';
 import { subscribePushNotifications, triggerAlertFeedback, unlockAudio } from '../utils/notify';
 import { saveOrderSnapshotToPhone } from '../utils/phoneStorage';
 import type { LegalDocType } from './LegalModal';
 import { PushNotificationsButton } from './PushNotificationsButton';
+import { QrPosterModal } from './QrPosterModal';
 import type { RequestWithQuotes } from '../types';
 
 const POPULAR_BRANDS = [
@@ -34,6 +34,8 @@ interface DriverViewProps {
   savedOrders: SavedOrderSummary[];
   onOrderCreated: (req: RequestWithQuotes) => void;
   onOpenOrder: (orderId: string) => void;
+  onDeleteOrder: (orderId: string) => void;
+  onClearOrders: () => void;
   onOpenLegal: (doc: LegalDocType) => void;
 }
 
@@ -42,6 +44,8 @@ export const DriverView: React.FC<DriverViewProps> = ({
   savedOrders,
   onOrderCreated,
   onOpenOrder,
+  onDeleteOrder,
+  onClearOrders,
   onOpenLegal,
 }) => {
   const [carBrandModel, setCarBrandModel] = useState('');
@@ -210,8 +214,6 @@ export const DriverView: React.FC<DriverViewProps> = ({
       setIsSubmitting(false);
     }
   };
-
-  const currentUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-9">
@@ -457,26 +459,49 @@ export const DriverView: React.FC<DriverViewProps> = ({
         <div className="space-y-5 lg:col-span-5 lg:pt-2">
           {savedOrders.length > 0 && (
             <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between">
-                <h2 className="font-display text-base font-bold text-slate-950">Son sifarişləriniz</h2>
-                <span className="font-mono text-xs text-slate-500">{savedOrders.length} ədəd</span>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <h2 className="font-display text-base font-bold text-slate-950">Son sifarişləriniz</h2>
+                  <span className="font-mono text-xs text-slate-500">({savedOrders.length})</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={onClearOrders}
+                  className="inline-flex min-h-[36px] items-center gap-1 rounded-xl px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-50 transition-colors"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Hamısını sil</span>
+                </button>
               </div>
               <div className="mt-3 divide-y divide-slate-100">
                 {savedOrders.map((item) => (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
-                    onClick={() => onOpenOrder(item.id)}
-                    className="flex w-full min-h-[60px] items-center justify-between gap-3 py-3 text-left transition-colors hover:bg-slate-50 rounded-xl px-2.5 -mx-2.5"
+                    className="flex items-center justify-between gap-2 py-2"
                   >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-slate-950">
-                        {item.carBrandModel} · <span className="font-mono text-slate-600">{item.year}</span>
-                      </p>
-                      <p className="truncate text-xs font-medium text-orange-700 mt-0.5">{item.partName}</p>
-                    </div>
-                    <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenOrder(item.id)}
+                      className="flex min-h-[52px] min-w-0 flex-1 items-center justify-between gap-3 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-slate-50 -ml-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-slate-950">
+                          {item.carBrandModel} · <span className="font-mono text-slate-600">{item.year}</span>
+                        </p>
+                        <p className="truncate text-xs font-medium text-orange-700 mt-0.5">{item.partName}</p>
+                      </div>
+                      <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onDeleteOrder(item.id)}
+                      aria-label={`${item.partName} sifarişini sil`}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-red-50 hover:text-red-700"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 ))}
               </div>
             </section>
@@ -509,45 +534,17 @@ export const DriverView: React.FC<DriverViewProps> = ({
               <button
                 type="button"
                 onClick={() => setShowQrModal(true)}
-                className="flex w-full min-h-[46px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/90 px-4 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:bg-slate-100"
+                className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/90 px-4 py-2.5 text-xs font-bold text-slate-800 transition-colors hover:bg-slate-100"
               >
-                <QrCode className="h-4 w-4 text-slate-700" />
-                <span>Tətbiqi QR kod ilə paylaş</span>
+                <QrCode className="h-4 w-4 text-orange-600 shrink-0" />
+                <span>QR kod kartı (Çap et və paylaş)</span>
               </button>
             </div>
           </section>
         </div>
       </div>
 
-      {showQrModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/60 sm:p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-t-3xl sm:rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl text-center">
-            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
-            <div className="flex items-center justify-between">
-              <h3 className="font-display text-base font-bold text-slate-950">QR kod ilə aç</h3>
-              <button
-                type="button"
-                onClick={() => setShowQrModal(false)}
-                aria-label="Bağla"
-                className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="mt-4 flex justify-center rounded-2xl border border-slate-200 bg-slate-50 p-5">
-              <QRCodeSVG value={currentUrl || 'https://avtotap.az'} size={180} />
-            </div>
-            <p className="mt-3 text-xs text-slate-600 break-all">{currentUrl}</p>
-            <button
-              type="button"
-              onClick={() => setShowQrModal(false)}
-              className="mt-5 w-full min-h-[48px] rounded-2xl bg-[#0B1120] text-sm font-bold text-white hover:bg-slate-800"
-            >
-              Bağla
-            </button>
-          </div>
-        </div>
-      )}
+      <QrPosterModal open={showQrModal} onClose={() => setShowQrModal(false)} />
     </div>
   );
 };

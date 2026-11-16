@@ -153,7 +153,7 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
   }
 
   if (shop && !shop.isEffectivelyActive) {
-    const renewalText = `Salam! "${shop.name}" mağazasının (${shop.whatsapp}) AvtoTap abunəliyini uzatmaq istəyirəm.`;
+    const renewalText = `Salam! "${shop.name}" mağazasının (${shop.whatsapp}) Şərur AvtoZapcast abunəliyini uzatmaq istəyirəm.`;
     const adminWaUrl = buildWhatsAppUrl(adminWhatsapp || '+994507770000', renewalText);
 
     return (

@@ -1,6 +1,6 @@
 self.addEventListener('push', function (event) {
   let payload = {
-    title: 'AvtoTap',
+    title: 'Şərur AvtoZapcast',
     body: 'Yeni bildiriş var',
     url: '/',
     tag: 'avtotap-alert',

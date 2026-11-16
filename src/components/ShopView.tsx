@@ -383,7 +383,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
 
   // Deactivated / Expired Subscription Screen
   if (!shop.isEffectivelyActive) {
-    const renewalText = `Salam! "${shop.name}" mağazasının (${shop.whatsapp}) AvtoTap abunəliyini uzatmaq istəyirəm.`;
+    const renewalText = `Salam! "${shop.name}" mağazasının (${shop.whatsapp}) Şərur AvtoZapcast abunəliyini uzatmaq istəyirəm.`;
     const adminWaUrl = buildWhatsAppUrl(adminWhatsapp || '+994507770000', renewalText);
 
     return (

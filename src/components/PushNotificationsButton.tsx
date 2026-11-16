@@ -58,7 +58,7 @@ export const PushNotificationsButton: React.FC<PushNotificationsButtonProps> = (
       if (result === 'granted') {
         triggerAlertFeedback('success', {
           notification: {
-            title: 'AvtoTap bildirişləri aktivdir',
+            title: 'Şərur AvtoZapcast bildirişləri aktivdir',
             body: 'Yeni sorğular və qiymət təklifləri səs və vibrasiya ilə dərhal gələcək.',
             url: window.location.href,
             tag: 'avtotap-enabled',

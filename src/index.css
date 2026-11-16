@@ -31,3 +31,34 @@
 .pb-safe {
   padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
 }
+
+@media print {
+  body {
+    background: #ffffff !important;
+    background-image: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  #qr-printable-poster,
+  #qr-printable-poster * {
+    visibility: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #qr-printable-poster {
+    position: fixed !important;
+    inset: 0 !important;
+    margin: auto !important;
+    width: 148mm !important;
+    max-width: 92vw !important;
+    height: auto !important;
+    box-shadow: none !important;
+  }
+}
+

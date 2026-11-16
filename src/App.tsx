@@ -9,7 +9,11 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { QuickReplyView } from './components/QuickReplyView';
 import { ShopView } from './components/ShopView';
 import { installGlobalAudioUnlocker } from './utils/notify';
-import { requestPersistentPhoneStorage } from './utils/phoneStorage';
+import {
+  clearAllOrderSnapshotsFromPhone,
+  deleteOrderSnapshotFromPhone,
+  requestPersistentPhoneStorage,
+} from './utils/phoneStorage';
 import type { RequestWithQuotes } from './types';
 
 type ActiveSection = 'driver' | 'shop' | 'admin';
@@ -163,6 +167,30 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const handleDeleteSavedOrder = (orderId: string) => {
+    setSavedOrders((prev) => {
+      const next = prev.filter((o) => o.id !== orderId);
+      localStorage.setItem(SAVED_ORDERS_KEY, JSON.stringify(next));
+      return next;
+    });
+    void deleteOrderSnapshotFromPhone(orderId);
+    if (activeOrderId === orderId) {
+      handleNewRequest();
+    }
+  };
+
+  const handleClearSavedOrders = () => {
+    const idsToDelete = savedOrders.map((o) => o.id);
+    setSavedOrders([]);
+    localStorage.removeItem(SAVED_ORDERS_KEY);
+    if (idsToDelete.length > 0) {
+      void clearAllOrderSnapshotsFromPhone(idsToDelete);
+    }
+    if (activeOrderId && idsToDelete.includes(activeOrderId)) {
+      handleNewRequest();
+    }
+  };
+
   return (
     <div className="flex min-h-screen flex-col text-slate-900">
       {/* Compact Frosted Sticky Top Bar (3-Zone Contract) */}
@@ -180,12 +208,12 @@ export default function App() {
             className="flex items-center gap-2.5 text-left whitespace-nowrap shrink-0"
           >
             <img
-              src="/icon.svg"
-              alt="AvtoTap loqosu"
-              className="h-8 w-8 rounded-xl shadow-sm shrink-0"
+              src="/pwa-192x192.png"
+              alt="Şərur AvtoZapcast loqosu"
+              className="h-9 w-9 rounded-xl shadow-sm shrink-0"
             />
-            <span className="font-display text-lg font-extrabold tracking-tight text-slate-950">
-              AvtoTap
+            <span className="font-display text-base sm:text-lg font-extrabold tracking-tight text-slate-950">
+              Şərur AvtoZapcast
             </span>
           </button>
 
@@ -248,6 +276,8 @@ export default function App() {
             savedOrders={savedOrders}
             onOrderCreated={handleOrderCreated}
             onOpenOrder={handleOpenOrder}
+            onDeleteOrder={handleDeleteSavedOrder}
+            onClearOrders={handleClearSavedOrders}
             onOpenLegal={(doc) => setLegalDoc(doc)}
           />
         )}
@@ -261,7 +291,7 @@ export default function App() {
       >
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 sm:flex-row sm:px-2">
           <p className="text-center sm:text-left">
-            © {new Date().getFullYear()} AvtoTap · Yerli avtomobil ehtiyat hissələri axtarışı
+            © {new Date().getFullYear()} Şərur AvtoZapcast · Yerli avtomobil ehtiyat hissələri axtarışı
           </p>
           <div className="flex flex-wrap items-center justify-center gap-4">
             <button
