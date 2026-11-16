@@ -8,6 +8,7 @@ import {
   X,
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
+import { triggerAlertFeedback, unlockAudio } from '../utils/notify';
 import type {
   PartAvailability,
   PartCondition,
@@ -84,9 +85,11 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    unlockAudio();
     setSubmitError(null);
     const parsed = Number(priceAzn);
     if (!Number.isFinite(parsed) || parsed <= 0) {
+      triggerAlertFeedback('error');
       setSubmitError('Düzgün qiymət (AZN) daxil edin.');
       return;
     }
@@ -109,12 +112,15 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
       });
       const data = await res.json();
       if (!res.ok) {
+        triggerAlertFeedback('error');
         setSubmitError(data.error || 'Cavab göndərilmədi.');
         return;
       }
+      triggerAlertFeedback('success');
       setSentQuote(data.quote);
       setJustSubmitted(true);
     } catch {
+      triggerAlertFeedback('error');
       setSubmitError('Serverlə əlaqə xətası.');
     } finally {
       setIsSending(false);
@@ -201,8 +207,6 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
-              <span>{request.district || 'Bakı'}</span>
-              <span aria-hidden="true">·</span>
               <span>{formatTimeAgoAz(request.createdAt)}</span>
             </div>
             <h1 className="mt-1 text-xl font-extrabold text-slate-900">

@@ -1,5 +1,9 @@
 {
   "authSecret": "a4c5675248e65f4696d0dfa3af58a6b2dab4b02c7efced11fa6e9440580133ff",
+  "vapidKeys": {
+    "publicKey": "BFdZFg238enk4sSriNq_FAydqO_XKg5CTmoG1kT3pu5q8PtdoCgnlVm1_Lyg1vzuIE9h4fRQ2cqFQ7fCeQ8nsV4",
+    "privateKey": "Fg3OucNIoi8I9a1NeWmN17dpsvbVGL4Sb5qeySbjTV4"
+  },
   "settings": {
     "adminWhatsapp": "+994 50 777 00 00",
     "adminPasswordHash": "b6afa1d3dece93c55b5a048d536c4231:3f7ebd002e800ee09a6b7ada1adefbcee3d2f92e963a9c733604a7b4465679ec"
@@ -30,5 +34,6 @@
     }
   ],
   "requests": [],
-  "quotes": []
+  "quotes": [],
+  "pushSubscriptions": []
 }

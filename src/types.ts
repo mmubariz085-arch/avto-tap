@@ -9,7 +9,7 @@ export type PartAvailability = 'Mövcuddur' | 'Sifarişlə (1-2 gün)' | 'Anbard
 export interface Shop {
   id: string;
   name: string;
-  district: string;
+  district?: string;
   whatsapp: string;
   telegramChatId?: string;
   pin: string;
@@ -22,7 +22,7 @@ export interface Shop {
 export interface PublicShopInfo {
   id: string;
   name: string;
-  district: string;
+  district?: string;
   whatsapp: string;
   telegramChatId?: string;
   tariff: ShopTariff;
@@ -39,7 +39,6 @@ export interface PartRequest {
   partName: string;
   photoDataUrl?: string;
   driverWhatsapp: string;
-  district?: string;
   note?: string;
   createdAt: string;
 }
@@ -49,7 +48,7 @@ export interface ShopQuote {
   requestId: string;
   shopId: string;
   shopName: string;
-  shopDistrict: string;
+  shopDistrict?: string;
   shopWhatsapp: string;
   shopTariff: ShopTariff;
   isVip: boolean;

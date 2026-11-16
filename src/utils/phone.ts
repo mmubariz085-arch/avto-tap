@@ -32,12 +32,14 @@ export function formatTimeAgoAz(iso: string): string {
 
 export async function compressImageFile(file: File, maxSize = 1080, quality = 0.78): Promise<string> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Şəkil oxunmadı'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('Şəkil formatı dəstəklənmir'));
-      img.onload = () => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Şəkil formatı dəstəklənmir'));
+    };
+    img.onload = () => {
+      try {
         let { width, height } = img;
         if (width > maxSize || height > maxSize) {
           if (width >= height) {
@@ -53,14 +55,19 @@ export async function compressImageFile(file: File, maxSize = 1080, quality = 0.
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          resolve(String(reader.result));
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error('Canvas yaradılmadı'));
           return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.src = String(reader.result);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        URL.revokeObjectURL(objectUrl);
+        resolve(dataUrl);
+      } catch (err) {
+        URL.revokeObjectURL(objectUrl);
+        reject(err);
+      }
     };
-    reader.readAsDataURL(file);
+    img.src = objectUrl;
   });
 }

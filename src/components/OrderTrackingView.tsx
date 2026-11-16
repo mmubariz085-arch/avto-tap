@@ -1,6 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Crown, MessageCircle, Phone, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Bell, CheckCircle2, Crown, MessageCircle, Phone, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { buildTelUrl, buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
+import { triggerAlertFeedback } from '../utils/notify';
+import { PushNotificationsButton } from './PushNotificationsButton';
 import type { RequestWithQuotes, ShopQuote, WsEvent } from '../types';
 
 interface OrderTrackingViewProps {
@@ -28,6 +30,11 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [zoomPhoto, setZoomPhoto] = useState<string | null>(null);
+  const [newQuoteBanner, setNewQuoteBanner] = useState<string | null>(null);
+  const seenQuoteIdsRef = useRef<Set<string>>(
+    new Set((initialOrder?.quotes || []).map((q) => q.id))
+  );
+  const initializedRef = useRef<boolean>(Boolean(initialOrder));
 
   const fetchOrder = useCallback(async () => {
     try {
@@ -38,7 +45,25 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
         setOrder(null);
         return;
       }
-      setOrder(data.request);
+      const incomingOrder = data.request as RequestWithQuotes;
+      if (initializedRef.current) {
+        const newlyAdded = incomingOrder.quotes.filter((q) => !seenQuoteIdsRef.current.has(q.id));
+        if (newlyAdded.length > 0) {
+          const latest = newlyAdded[0];
+          triggerAlertFeedback('incoming', {
+            notification: {
+              title: `Yeni qiymət: ${latest.priceAzn} AZN (${latest.shopName})`,
+              body: `${incomingOrder.partName} · ${latest.condition}`,
+              url: `/?order=${encodeURIComponent(orderId)}`,
+              tag: `quote-${latest.id}`,
+            },
+          });
+          setNewQuoteBanner(`Yeni təklif gəldi: ${latest.shopName} — ${latest.priceAzn} AZN`);
+        }
+      }
+      incomingOrder.quotes.forEach((q) => seenQuoteIdsRef.current.add(q.id));
+      initializedRef.current = true;
+      setOrder(incomingOrder);
       if (typeof data.activeShopCount === 'number') {
         setActiveShopCount(data.activeShopCount);
       }
@@ -74,6 +99,18 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
           const event = JSON.parse(evt.data) as WsEvent;
           if (event.type === 'quote:created' && event.payload.requestId === orderId) {
             const incoming = event.payload.quote;
+            if (!seenQuoteIdsRef.current.has(incoming.id)) {
+              seenQuoteIdsRef.current.add(incoming.id);
+              triggerAlertFeedback('incoming', {
+                notification: {
+                  title: `Yeni qiymət: ${incoming.priceAzn} AZN (${incoming.shopName})`,
+                  body: `${incoming.condition} · ${incoming.availability}`,
+                  url: `/?order=${encodeURIComponent(orderId)}`,
+                  tag: `quote-${incoming.id}`,
+                },
+              });
+              setNewQuoteBanner(`Yeni təklif gəldi: ${incoming.shopName} — ${incoming.priceAzn} AZN`);
+            }
             setOrder((prev) => {
               if (!prev) return prev;
               const filtered = prev.quotes.filter(
@@ -169,6 +206,26 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
         </div>
       </div>
 
+      {newQuoteBanner && (
+        <div
+          role="status"
+          className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-900 shadow-sm"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Bell className="h-4 w-4 text-emerald-700 shrink-0" />
+            <span>{newQuoteBanner}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setNewQuoteBanner(null)}
+            aria-label="Bağla"
+            className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-emerald-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
         {/* Order Summary Card */}
         <aside className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-4">
@@ -179,8 +236,6 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
           <p className="mt-2 text-base font-semibold text-orange-700">{order.partName}</p>
 
           <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-            <span>{order.district || 'Bakı'}</span>
-            <span aria-hidden="true">·</span>
             <span className="font-mono tabular-nums">{order.driverWhatsapp}</span>
             <span aria-hidden="true">·</span>
             <span>{formatTimeAgoAz(order.createdAt)}</span>
@@ -204,6 +259,10 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
           <div className="mt-4 border-t border-slate-100 pt-4 text-xs leading-relaxed text-slate-600">
             Sorğunuz {activeShopCount > 0 ? `${activeShopCount} aktiv mağazaya` : 'mağazalara'} göndərilib.
             Mağaza qiymət göndərdikcə təkliflər burada dərhal görünəcək.
+          </div>
+
+          <div className="mt-4">
+            <PushNotificationsButton role="driver" orderId={orderId} />
           </div>
         </aside>
 
@@ -266,8 +325,12 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
                             {quote.shopName}
                           </h3>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-slate-600">
-                            <span>{quote.shopDistrict}</span>
-                            <span aria-hidden="true">·</span>
+                            {quote.shopDistrict && (
+                              <>
+                                <span>{quote.shopDistrict}</span>
+                                <span aria-hidden="true">·</span>
+                              </>
+                            )}
                             <span className="text-slate-900 font-semibold">{quote.condition}</span>
                             <span aria-hidden="true">·</span>
                             <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">

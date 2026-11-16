@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import express from 'express';
+import * as webpush from 'web-push';
 import { WebSocket, WebSocketServer } from 'ws';
 import type {
   PartAvailability,
@@ -30,8 +31,24 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
 
+interface PushSubscriptionRecord {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  role: 'driver' | 'shop' | 'admin';
+  orderId?: string;
+  shopId?: string;
+  createdAt: string;
+}
+
 interface DbSchema {
   authSecret: string;
+  vapidKeys?: {
+    publicKey: string;
+    privateKey: string;
+  };
   settings: {
     adminWhatsapp: string;
     adminPasswordHash?: string;
@@ -39,6 +56,7 @@ interface DbSchema {
   shops: Shop[];
   requests: PartRequest[];
   quotes: ShopQuote[];
+  pushSubscriptions?: PushSubscriptionRecord[];
 }
 
 function normalizePhoneDigits(raw: string): string {
@@ -97,6 +115,7 @@ function toPublicShop(shop: Shop): PublicShopInfo {
 function createInitialDb(): DbSchema {
   return {
     authSecret: crypto.randomBytes(32).toString('hex'),
+    vapidKeys: webpush.generateVAPIDKeys(),
     settings: {
       adminWhatsapp: '+994 50 777 00 00',
     },
@@ -104,7 +123,7 @@ function createInitialDb(): DbSchema {
       {
         id: 'shop_babek_vip',
         name: 'Babək Avto Zapçast',
-        district: 'Bakı · Babək pr.',
+        district: '',
         whatsapp: '+994 50 555 10 10',
         telegramChatId: '',
         pin: '1111',
@@ -115,8 +134,8 @@ function createInitialDb(): DbSchema {
       },
       {
         id: 'shop_sumqayit_oluxana',
-        name: 'Sumqayıt Ölüxana',
-        district: 'Sumqayıt',
+        name: 'Avto Ölüxana Mərkəzi',
+        district: '',
         whatsapp: '+994 55 444 20 20',
         telegramChatId: '',
         pin: '2222',
@@ -128,6 +147,7 @@ function createInitialDb(): DbSchema {
     ],
     requests: [],
     quotes: [],
+    pushSubscriptions: [],
   };
 }
 
@@ -144,6 +164,10 @@ function loadDb(): DbSchema {
     const initial = createInitialDb();
     return {
       authSecret: parsed.authSecret || initial.authSecret,
+      vapidKeys:
+        parsed.vapidKeys?.publicKey && parsed.vapidKeys?.privateKey
+          ? parsed.vapidKeys
+          : initial.vapidKeys,
       settings: {
         adminWhatsapp: parsed.settings?.adminWhatsapp || initial.settings.adminWhatsapp,
         adminPasswordHash: parsed.settings?.adminPasswordHash,
@@ -151,6 +175,7 @@ function loadDb(): DbSchema {
       shops: Array.isArray(parsed.shops) ? parsed.shops : initial.shops,
       requests: Array.isArray(parsed.requests) ? parsed.requests : [],
       quotes: Array.isArray(parsed.quotes) ? parsed.quotes : [],
+      pushSubscriptions: Array.isArray(parsed.pushSubscriptions) ? parsed.pushSubscriptions : [],
     };
   } catch {
     const initial = createInitialDb();
@@ -167,6 +192,18 @@ function saveDb(data: DbSchema): void {
 }
 
 let db: DbSchema = loadDb();
+if (!db.vapidKeys?.publicKey || !db.vapidKeys?.privateKey) {
+  db.vapidKeys = webpush.generateVAPIDKeys();
+  saveDb(db);
+}
+if (!Array.isArray(db.pushSubscriptions)) {
+  db.pushSubscriptions = [];
+}
+webpush.setVapidDetails(
+  'mailto:admin@avtotap.az',
+  db.vapidKeys.publicKey,
+  db.vapidKeys.privateKey
+);
 
 function hashAdminPassword(pw: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -275,13 +312,10 @@ async function dispatchTelegramAlerts(
         `Avtomobil: ${reqItem.carBrandModel}`,
         `Buraxılış ili: ${reqItem.year}`,
         `Detal: ${reqItem.partName}`,
-        reqItem.district ? `Rayon: ${reqItem.district}` : null,
         ``,
         `Qiymət və vəziyyəti göndərmək üçün linkə keçin:`,
         quickReplyUrl,
-      ]
-        .filter((line) => line !== null)
-        .join('\n');
+      ].join('\n');
 
       const body: Record<string, unknown> = {
         chat_id: shop.telegramChatId!.trim(),
@@ -310,6 +344,53 @@ async function dispatchTelegramAlerts(
   );
 
   return results.filter((r) => r.status === 'fulfilled').length;
+}
+
+async function dispatchWebPush(
+  filter: (sub: PushSubscriptionRecord) => boolean,
+  payload: { title: string; body: string; url: string; tag: string }
+): Promise<void> {
+  const subs = db.pushSubscriptions || [];
+  if (subs.length === 0) return;
+
+  const seenEndpoints = new Set<string>();
+  const targets = subs.filter((sub) => {
+    if (!filter(sub)) return false;
+    if (seenEndpoints.has(sub.endpoint)) return false;
+    seenEndpoints.add(sub.endpoint);
+    return true;
+  });
+  if (targets.length === 0) return;
+
+  const deadEndpoints = new Set<string>();
+  const jsonPayload = JSON.stringify(payload);
+
+  await Promise.allSettled(
+    targets.map(async (sub) => {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: sub.keys,
+          },
+          jsonPayload,
+          { urgency: 'high', TTL: 3600 }
+        );
+      } catch (err: unknown) {
+        const status = (err as { statusCode?: number })?.statusCode;
+        if (status === 404 || status === 410) {
+          deadEndpoints.add(sub.endpoint);
+        }
+      }
+    })
+  );
+
+  if (deadEndpoints.size > 0) {
+    db.pushSubscriptions = (db.pushSubscriptions || []).filter(
+      (s) => !deadEndpoints.has(s.endpoint)
+    );
+    saveDb(db);
+  }
 }
 
 interface WsClientMeta {
@@ -346,9 +427,65 @@ async function startServer() {
     });
   });
 
+  app.get('/api/push/vapid-key', (_req, res) => {
+    res.json({ publicKey: db.vapidKeys?.publicKey || '' });
+  });
+
+  app.post('/api/push/subscribe', (req, res) => {
+    const { subscription, role, orderId } = req.body ?? {};
+    const endpoint = typeof subscription?.endpoint === 'string' ? subscription.endpoint.trim() : '';
+    const p256dh = typeof subscription?.keys?.p256dh === 'string' ? subscription.keys.p256dh.trim() : '';
+    const auth = typeof subscription?.keys?.auth === 'string' ? subscription.keys.auth.trim() : '';
+
+    if (!endpoint || !p256dh || !auth) {
+      res.status(400).json({ error: 'Push abunəlik məlumatı natamamdır.' });
+      return;
+    }
+
+    let resolvedRole: 'driver' | 'shop' | 'admin' = 'driver';
+    let shopId: string | undefined;
+
+    if (role === 'shop' || role === 'admin') {
+      const token = extractBearerToken(req);
+      const claims = token ? verifyToken(token) : null;
+      if (claims && claims.role === 'shop' && typeof claims.shopId === 'string') {
+        resolvedRole = 'shop';
+        shopId = claims.shopId;
+      } else if (claims && claims.role === 'admin') {
+        resolvedRole = 'admin';
+      } else {
+        res.status(401).json({ error: 'İcazə tələb olunur.' });
+        return;
+      }
+    }
+
+    const cleanOrderId =
+      resolvedRole === 'driver' && typeof orderId === 'string' && orderId.trim()
+        ? orderId.trim()
+        : undefined;
+
+    const record: PushSubscriptionRecord = {
+      endpoint,
+      keys: { p256dh, auth },
+      role: resolvedRole,
+      orderId: cleanOrderId,
+      shopId,
+      createdAt: new Date().toISOString(),
+    };
+
+    const existingList = db.pushSubscriptions || [];
+    const filtered = existingList.filter(
+      (s) => !(s.endpoint === endpoint && s.role === resolvedRole)
+    );
+    db.pushSubscriptions = [record, ...filtered].slice(0, 1000);
+    saveDb(db);
+
+    res.json({ ok: true });
+  });
+
   // Driver creates a part request
   app.post('/api/requests', (req, res) => {
-    const { carBrandModel, year, partName, photoDataUrl, driverWhatsapp, district, note, acceptedTerms } =
+    const { carBrandModel, year, partName, photoDataUrl, driverWhatsapp, note, acceptedTerms } =
       req.body ?? {};
 
     if (!acceptedTerms) {
@@ -380,7 +517,6 @@ async function startServer() {
       partName: cleanPart.slice(0, 200),
       photoDataUrl: safePhoto,
       driverWhatsapp: formatDisplayPhone(cleanPhone),
-      district: typeof district === 'string' && district.trim() ? district.trim().slice(0, 80) : undefined,
       note: typeof note === 'string' && note.trim() ? note.trim().slice(0, 300) : undefined,
       createdAt: new Date().toISOString(),
     };
@@ -389,6 +525,7 @@ async function startServer() {
     saveDb(db);
 
     const activeShops = db.shops.filter(isShopEffectivelyActive);
+    const activeShopIds = new Set(activeShops.map((s) => s.id));
     const fullReq = buildRequestWithQuotes(newRequest);
 
     broadcastWs({ type: 'request:created', payload: fullReq }, (client) => {
@@ -397,6 +534,23 @@ async function startServer() {
 
     const baseUrl = resolveBaseUrl(req);
     void dispatchTelegramAlerts(newRequest, activeShops, baseUrl);
+
+    void dispatchWebPush(
+      (sub) => sub.role === 'shop' && (!sub.shopId || activeShopIds.has(sub.shopId)),
+      {
+        title: `Yeni sorğu: ${newRequest.carBrandModel} (${newRequest.year})`,
+        body: newRequest.partName,
+        url: `/?tab=shop&reply=${encodeURIComponent(newRequest.id)}`,
+        tag: `req-${newRequest.id}`,
+      }
+    );
+
+    void dispatchWebPush((sub) => sub.role === 'admin', {
+      title: `Yeni sürücü sorğusu: ${newRequest.carBrandModel}`,
+      body: `${newRequest.partName} (${newRequest.year})`,
+      url: '/#admin',
+      tag: `admin-req-${newRequest.id}`,
+    });
 
     res.status(201).json({
       request: fullReq,
@@ -602,6 +756,23 @@ async function startServer() {
         (client.role === 'driver' && client.orderId === targetReq.id)
     );
 
+    void dispatchWebPush(
+      (sub) => sub.role === 'driver' && (!sub.orderId || sub.orderId === targetReq.id),
+      {
+        title: `Yeni qiymət: ${quote.priceAzn} AZN (${quote.shopName})`,
+        body: `${targetReq.partName} · ${quote.condition} · ${quote.availability}`,
+        url: `/?order=${encodeURIComponent(targetReq.id)}`,
+        tag: `quote-${quote.id}`,
+      }
+    );
+
+    void dispatchWebPush((sub) => sub.role === 'admin', {
+      title: `Yeni cavab: ${quote.shopName} — ${quote.priceAzn} AZN`,
+      body: `${targetReq.carBrandModel} · ${targetReq.partName}`,
+      url: '/#admin',
+      tag: `admin-quote-${quote.id}`,
+    });
+
     res.status(201).json({ quote });
   });
 
@@ -759,13 +930,13 @@ async function startServer() {
 
     const { name, district, whatsapp, telegramChatId, pin, tariff, expiresAt, status } = req.body ?? {};
     const cleanName = String(name || '').trim();
-    const cleanDistrict = String(district || '').trim();
+    const cleanDistrict = typeof district === 'string' ? district.trim() : '';
     const cleanWhatsapp = String(whatsapp || '').trim();
     const cleanTelegramChatId = typeof telegramChatId === 'string' ? telegramChatId.trim() : '';
     const cleanPin = String(pin || '').trim();
 
-    if (!cleanName || !cleanDistrict || normalizePhoneDigits(cleanWhatsapp).length < 9 || cleanPin.length < 4) {
-      res.status(400).json({ error: 'Mağaza adı, rayon, WhatsApp nömrəsi və ən azı 4 rəqəmli PIN vacibdir.' });
+    if (!cleanName || normalizePhoneDigits(cleanWhatsapp).length < 9 || cleanPin.length < 4) {
+      res.status(400).json({ error: 'Mağaza adı, WhatsApp nömrəsi və ən azı 4 rəqəmli PIN vacibdir.' });
       return;
     }
 
@@ -779,7 +950,7 @@ async function startServer() {
     const newShop: Shop = {
       id: `shop_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
       name: cleanName.slice(0, 100),
-      district: cleanDistrict.slice(0, 80),
+      district: cleanDistrict ? cleanDistrict.slice(0, 80) : undefined,
       whatsapp: formatDisplayPhone(cleanWhatsapp),
       telegramChatId: cleanTelegramChatId.slice(0, 40),
       pin: cleanPin.slice(0, 12),
@@ -812,8 +983,8 @@ async function startServer() {
       ...current,
       name: typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 100) : current.name,
       district:
-        typeof body.district === 'string' && body.district.trim()
-          ? body.district.trim().slice(0, 80)
+        typeof body.district === 'string'
+          ? body.district.trim().slice(0, 80) || undefined
           : current.district,
       whatsapp:
         typeof body.whatsapp === 'string' && normalizePhoneDigits(body.whatsapp).length >= 9
@@ -909,24 +1080,43 @@ async function startServer() {
     res.json({ ok: true });
   });
 
+  const server = http.createServer(app);
+
   if (!IS_PROD) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        ws: { server, path: '/__vite_hmr' },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
     const distDir = path.join(__dirname, 'dist');
     app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
+    app.get(['/dev-sw.js', '/sw.js', '/workbox-*.js', '/sw-push.js'], (_req, res) => {
+      res.status(404).type('application/javascript').send('// not found');
+    });
+    app.get('*', (req, res) => {
+      if (req.path.endsWith('.js') || req.path.endsWith('.css') || req.path.endsWith('.json')) {
+        res.status(404).end();
+        return;
+      }
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
-  const server = http.createServer(app);
-
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (req, socket, head) => {
+    const pathname = new URL(req.url || '/', `http://localhost:${PORT}`).pathname;
+    if (pathname === '/ws') {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+    }
+  });
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url || '/ws', `http://localhost:${PORT}`);
     const roleParam = url.searchParams.get('role');

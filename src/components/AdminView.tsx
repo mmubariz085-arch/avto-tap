@@ -20,6 +20,8 @@ import {
   X,
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
+import { triggerAlertFeedback } from '../utils/notify';
+import { PushNotificationsButton } from './PushNotificationsButton';
 import type {
   AdminSettings,
   RequestWithQuotes,
@@ -93,6 +95,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
   // Expanded request quotes
   const [expandedReqId, setExpandedReqId] = useState<string | null>(null);
+  const [adminAlertBanner, setAdminAlertBanner] = useState<string | null>(null);
 
   const fetchDashboard = useCallback(async (activeToken: string) => {
     try {
@@ -144,11 +147,33 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         try {
           const event = JSON.parse(evt.data) as WsEvent;
           if (event.type === 'request:created') {
+            triggerAlertFeedback('incoming', {
+              notification: {
+                title: `Yeni sürücü sorğusu: ${event.payload.carBrandModel}`,
+                body: `${event.payload.partName} (${event.payload.year})`,
+                url: '/#admin',
+                tag: `admin-req-${event.payload.id}`,
+              },
+            });
+            setAdminAlertBanner(
+              `Yeni sorğu: ${event.payload.carBrandModel} (${event.payload.year}) — ${event.payload.partName}`
+            );
             setRequests((prev) => {
               if (prev.some((r) => r.id === event.payload.id)) return prev;
               return [event.payload, ...prev];
             });
           } else if (event.type === 'quote:created') {
+            triggerAlertFeedback('incoming', {
+              notification: {
+                title: `Yeni cavab: ${event.payload.quote.shopName} — ${event.payload.quote.priceAzn} AZN`,
+                body: `${event.payload.quote.condition} · ${event.payload.quote.availability}`,
+                url: '/#admin',
+                tag: `admin-quote-${event.payload.quote.id}`,
+              },
+            });
+            setAdminAlertBanner(
+              `Yeni cavab: ${event.payload.quote.shopName} — ${event.payload.quote.priceAzn} AZN`
+            );
             setRequests((prev) =>
               prev.map((r) => {
                 if (r.id !== event.payload.requestId) return r;
@@ -274,7 +299,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   const openCreateShop = (prefillChatId = '') => {
     setEditingShopId(null);
     setShopName('');
-    setShopDistrict('Bakı · Babək pr.');
+    setShopDistrict('');
     setShopWhatsapp('+994 ');
     setShopTelegramChatId(prefillChatId);
     setShopPin(String(Math.floor(1000 + Math.random() * 9000)));
@@ -288,7 +313,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   const openEditShop = (shop: AdminShopRow) => {
     setEditingShopId(shop.id);
     setShopName(shop.name);
-    setShopDistrict(shop.district);
+    setShopDistrict(shop.district || '');
     setShopWhatsapp(shop.whatsapp);
     setShopTelegramChatId(shop.telegramChatId || '');
     setShopPin(shop.pin);
@@ -526,15 +551,35 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold text-white hover:bg-white/20"
-        >
-          <LogOut className="h-4 w-4" />
-          <span>Çıxış</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <PushNotificationsButton role="admin" authToken={token} compact />
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold text-white hover:bg-white/20"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>Çıxış</span>
+          </button>
+        </div>
       </div>
+
+      {adminAlertBanner && (
+        <div
+          role="status"
+          className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-bold text-orange-900"
+        >
+          <span>{adminAlertBanner}</span>
+          <button
+            type="button"
+            onClick={() => setAdminAlertBanner(null)}
+            aria-label="Bağla"
+            className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-orange-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Tab Navigation */}
       <div className="mb-6 flex items-center justify-between gap-3 flex-wrap">
@@ -791,8 +836,12 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                           </h3>
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
-                          <span>{shop.district}</span>
-                          <span aria-hidden="true">·</span>
+                          {shop.district && (
+                            <>
+                              <span>{shop.district}</span>
+                              <span aria-hidden="true">·</span>
+                            </>
+                          )}
                           <span className="font-semibold text-slate-900">{shop.tariff}</span>
                           <span aria-hidden="true">·</span>
                           <span className="font-mono tabular-nums">{shop.quoteCount} cavab</span>
@@ -910,8 +959,6 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
                           <span className="font-mono">#{reqItem.id.slice(-6).toUpperCase()}</span>
                           <span aria-hidden="true">·</span>
-                          <span>{reqItem.district || 'Bakı'}</span>
-                          <span aria-hidden="true">·</span>
                           <span>{formatTimeAgoAz(reqItem.createdAt)}</span>
                         </div>
                         <h3 className="mt-1 text-base font-extrabold text-slate-900">
@@ -1011,14 +1058,13 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700">Rayon</label>
+                  <label className="block text-xs font-bold text-slate-700">Ünvan (istəyə bağlı)</label>
                   <input
                     type="text"
                     value={shopDistrict}
                     onChange={(e) => setShopDistrict(e.target.value)}
-                    placeholder="Bakı · Babək pr."
+                    placeholder="Məsələn: Mərkəzi küçə 15"
                     className="mt-1 w-full min-h-[46px] rounded-xl border border-slate-300 px-3.5 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                    required
                   />
                 </div>
                 <div>

@@ -12,6 +12,8 @@ import {
   X,
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
+import { triggerAlertFeedback, unlockAudio } from '../utils/notify';
+import { PushNotificationsButton } from './PushNotificationsButton';
 import type {
   PartAvailability,
   PartCondition,
@@ -33,27 +35,6 @@ interface ShopViewProps {
 
 const CONDITIONS: PartCondition[] = ['Orijinal', 'Dublikat', 'Üstən çıxma'];
 const AVAILABILITIES: PartAvailability[] = ['Mövcuddur', 'Anbarda son ədəd', 'Sifarişlə (1-2 gün)'];
-
-function playNotificationTone() {
-  try {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(1174.66, ctx.currentTime + 0.12);
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.3);
-  } catch {
-    // ignore audio restriction
-  }
-}
 
 export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReplyId }) => {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('avtotap_shop_token'));
@@ -151,7 +132,16 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
               };
               return [nextItem, ...prev];
             });
-            if (soundEnabled) playNotificationTone();
+            triggerAlertFeedback('incoming', {
+              sound: soundEnabled,
+              vibrate: soundEnabled,
+              notification: {
+                title: `Yeni sorğu: ${incoming.carBrandModel} (${incoming.year})`,
+                body: incoming.partName,
+                url: `/?tab=shop&reply=${encodeURIComponent(incoming.id)}`,
+                tag: `req-${incoming.id}`,
+              },
+            });
             setNewAlertBanner(`Yeni sorğu: ${incoming.carBrandModel} (${incoming.year}) — ${incoming.partName}`);
           } else if (event.type === 'request:deleted') {
             setFeed((prev) => prev.filter((r) => r.id !== event.payload.requestId));
@@ -226,10 +216,12 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   const handleSubmitQuote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeRequest || !token) return;
+    unlockAudio();
     setQuoteError(null);
 
     const parsed = Number(priceAzn);
     if (!Number.isFinite(parsed) || parsed <= 0) {
+      triggerAlertFeedback('error', { sound: soundEnabled, vibrate: soundEnabled });
       setQuoteError('Düzgün qiymət (AZN) daxil edin.');
       return;
     }
@@ -252,6 +244,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       });
       const data = await res.json();
       if (!res.ok) {
+        triggerAlertFeedback('error', { sound: soundEnabled, vibrate: soundEnabled });
         setQuoteError(data.error || 'Qiymət göndərilmədi.');
         return;
       }
@@ -268,8 +261,10 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             : item
         )
       );
+      triggerAlertFeedback('success', { sound: soundEnabled, vibrate: soundEnabled });
       setActiveRequest(null);
     } catch {
+      triggerAlertFeedback('error', { sound: soundEnabled, vibrate: soundEnabled });
       setQuoteError('Şəbəkə xətası baş verdi.');
     } finally {
       setIsSendingQuote(false);
@@ -411,15 +406,20 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
         <div className="min-w-0">
           <h1 className="truncate text-lg font-extrabold text-slate-900">{shop.name}</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-600">
-            <span>{shop.district}</span>
-            <span aria-hidden="true">·</span>
+            {shop.district && (
+              <>
+                <span>{shop.district}</span>
+                <span aria-hidden="true">·</span>
+              </>
+            )}
             <span className="font-semibold text-slate-900">{shop.tariff}</span>
             <span aria-hidden="true">·</span>
             <span className="text-emerald-700 font-semibold">Aktiv ({shop.expiresAt}-dək)</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <PushNotificationsButton role="shop" authToken={token} compact />
           <button
             type="button"
             onClick={() => setSoundEnabled((v) => !v)}
@@ -480,8 +480,6 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
-                      <span>{item.district || 'Bakı'}</span>
-                      <span aria-hidden="true">·</span>
                       <span>{formatTimeAgoAz(item.createdAt)}</span>
                       <span aria-hidden="true">·</span>
                       <span>{item.totalQuotes} cavab</span>

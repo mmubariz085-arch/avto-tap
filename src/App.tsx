@@ -8,6 +8,7 @@ import { OrderTrackingView } from './components/OrderTrackingView';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { QuickReplyView } from './components/QuickReplyView';
 import { ShopView } from './components/ShopView';
+import { installGlobalAudioUnlocker } from './utils/notify';
 import type { RequestWithQuotes } from './types';
 
 type ActiveSection = 'driver' | 'shop' | 'admin';
@@ -79,7 +80,11 @@ export default function App() {
       }
     };
     window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    const uninstallAudio = installGlobalAudioUnlocker();
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      uninstallAudio();
+    };
   }, []);
 
   const updateUrlOrder = (orderId: string | null) => {

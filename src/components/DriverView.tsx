@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Camera, Check, ChevronRight, ImagePlus, QrCode, Send, Trash2, X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { compressImageFile } from '../utils/phone';
+import { subscribePushNotifications, triggerAlertFeedback, unlockAudio } from '../utils/notify';
 import type { LegalDocType } from './LegalModal';
+import { PushNotificationsButton } from './PushNotificationsButton';
 import type { RequestWithQuotes } from '../types';
 
 const POPULAR_BRANDS = [
@@ -17,8 +19,6 @@ const POPULAR_BRANDS = [
   'Opel',
   'Volkswagen',
 ];
-
-const DISTRICTS = ['Bakı', 'Sumqayıt', 'Xırdalan', 'Abşeron', 'Gəncə', 'Digər'];
 
 export interface SavedOrderSummary {
   id: string;
@@ -47,7 +47,6 @@ export const DriverView: React.FC<DriverViewProps> = ({
   const [year, setYear] = useState('');
   const [partName, setPartName] = useState('');
   const [driverWhatsapp, setDriverWhatsapp] = useState('+994 ');
-  const [district, setDistrict] = useState('Bakı');
   const [photoDataUrl, setPhotoDataUrl] = useState<string | undefined>(undefined);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
@@ -95,53 +94,116 @@ export const DriverView: React.FC<DriverViewProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    unlockAudio();
     setErrorMsg(null);
 
-    if (!carBrandModel.trim()) {
+    const cleanBrand = carBrandModel.trim();
+    const cleanYear = year.trim();
+    const cleanPart = partName.trim();
+    const cleanPhone = driverWhatsapp.trim();
+
+    if (!cleanBrand) {
+      triggerAlertFeedback('error');
       setErrorMsg('Avtomobilin marka və modelini yazın.');
       return;
     }
-    if (!year.trim()) {
+    if (!cleanYear) {
+      triggerAlertFeedback('error');
       setErrorMsg('Buraxılış ilini qeyd edin.');
       return;
     }
-    if (!partName.trim()) {
+    if (!cleanPart) {
+      triggerAlertFeedback('error');
       setErrorMsg('Lazım olan detalın adını yazın.');
       return;
     }
-    if (driverWhatsapp.replace(/\D/g, '').length < 9) {
+    if (cleanPhone.replace(/\D/g, '').length < 9) {
+      triggerAlertFeedback('error');
       setErrorMsg('Düzgün WhatsApp nömrəsi daxil edin.');
       return;
     }
     if (!acceptedTerms) {
+      triggerAlertFeedback('error');
       setErrorMsg('Davam etmək üçün razılaşma və məxfilik şərtlərini təsdiq edin.');
       return;
     }
 
     setIsSubmitting(true);
+    const payload = JSON.stringify({
+      carBrandModel: cleanBrand,
+      year: cleanYear,
+      partName: cleanPart,
+      photoDataUrl,
+      driverWhatsapp: cleanPhone,
+      acceptedTerms: true,
+    });
+
     try {
-      const res = await fetch('/api/requests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          carBrandModel: carBrandModel.trim(),
-          year: year.trim(),
-          partName: partName.trim(),
-          photoDataUrl,
-          driverWhatsapp: driverWhatsapp.trim(),
-          district,
-          acceptedTerms: true,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(data.error || 'Sorğu göndərilərkən xəta baş verdi.');
-        return;
+      let lastError = 'Serverlə əlaqə yaradılmadı. İnterneti yoxlayın.';
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+          const res = await fetch('/api/requests', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            cache: 'no-store',
+            body: payload,
+            signal: controller.signal,
+          });
+          window.clearTimeout(timeoutId);
+
+          const rawText = await res.text();
+          let data: { error?: string; request?: RequestWithQuotes } = {};
+          try {
+            data = rawText ? JSON.parse(rawText) : {};
+          } catch {
+            data = {};
+          }
+
+          if (!res.ok) {
+            if (res.status >= 500 && attempt === 0) {
+              await new Promise((r) => setTimeout(r, 500));
+              continue;
+            }
+            triggerAlertFeedback('error');
+            setErrorMsg(data.error || 'Sorğu göndərilərkən xəta baş verdi.');
+            return;
+          }
+
+          if (!data.request) {
+            if (attempt === 0) {
+              await new Promise((r) => setTimeout(r, 500));
+              continue;
+            }
+            triggerAlertFeedback('error');
+            setErrorMsg('Server cavabı natamam oldu. Yenidən cəhd edin.');
+            return;
+          }
+
+          localStorage.setItem('avtotap_driver_phone', cleanPhone);
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            void subscribePushNotifications({
+              role: 'driver',
+              orderId: data.request.id,
+              requestPermissionIfDefault: false,
+            });
+          }
+          triggerAlertFeedback('success');
+          onOrderCreated(data.request);
+          return;
+        } catch {
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 500));
+            continue;
+          }
+          lastError = 'Serverlə əlaqə yaradılmadı. İnterneti yoxlayın.';
+        }
       }
-      localStorage.setItem('avtotap_driver_phone', driverWhatsapp.trim());
-      onOrderCreated(data.request);
-    } catch {
-      setErrorMsg('Serverlə əlaqə yaradılmadı. İnterneti yoxlayın.');
+      triggerAlertFeedback('error');
+      setErrorMsg(lastError);
     } finally {
       setIsSubmitting(false);
     }
@@ -161,11 +223,15 @@ export const DriverView: React.FC<DriverViewProps> = ({
             <p className="mt-1.5 text-sm text-slate-600">
               {activeShopCount > 0
                 ? `${activeShopCount} aktiv mağaza və ölüxana sorğunuza real vaxtda qiymət göndərəcək.`
-                : 'Rayonun ehtiyat hissəsi mağazaları və ölüxanalarından dərhal qiymət alın.'}
+                : 'Yerli ehtiyat hissəsi mağazalarından və ölüxanalardan dərhal qiymət alın.'}
             </p>
+            <div className="mt-3">
+              <PushNotificationsButton role="driver" />
+            </div>
           </div>
 
           <form
+            noValidate
             onSubmit={handleSubmit}
             className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 space-y-5"
           >
@@ -201,47 +267,23 @@ export const DriverView: React.FC<DriverViewProps> = ({
                 onChange={(e) => setCarBrandModel(e.target.value)}
                 placeholder="Məsələn: Mercedes E-Class W211"
                 className="mt-2.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 text-base text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
-                required
               />
             </div>
 
-            {/* Year & District */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label htmlFor="car-year-input" className="block text-sm font-semibold text-slate-900">
-                  Buraxılış ili
-                </label>
-                <input
-                  id="car-year-input"
-                  type="number"
-                  inputMode="numeric"
-                  min={1960}
-                  max={2027}
-                  value={year}
-                  onChange={(e) => setYear(e.target.value)}
-                  placeholder="Məsələn: 2014"
-                  className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 font-mono tabular-nums text-base text-slate-900 placeholder:font-sans placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="driver-district" className="block text-sm font-semibold text-slate-900">
-                  Rayon / Şəhər
-                </label>
-                <select
-                  id="driver-district"
-                  value={district}
-                  onChange={(e) => setDistrict(e.target.value)}
-                  className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 text-base text-slate-900 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
-                >
-                  {DISTRICTS.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            {/* Year */}
+            <div>
+              <label htmlFor="car-year-input" className="block text-sm font-semibold text-slate-900">
+                Buraxılış ili
+              </label>
+              <input
+                id="car-year-input"
+                type="text"
+                inputMode="numeric"
+                value={year}
+                onChange={(e) => setYear(e.target.value.replace(/[^\d]/g, '').slice(0, 4))}
+                placeholder="Məsələn: 2014"
+                className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 font-mono tabular-nums text-base text-slate-900 placeholder:font-sans placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
+              />
             </div>
 
             {/* Part Name */}
@@ -256,7 +298,6 @@ export const DriverView: React.FC<DriverViewProps> = ({
                 onChange={(e) => setPartName(e.target.value)}
                 placeholder="Məsələn: Ön sağ fara, su radiatoru, arxa bufer"
                 className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 text-base text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
-                required
               />
             </div>
 
@@ -338,18 +379,23 @@ export const DriverView: React.FC<DriverViewProps> = ({
                 onChange={(e) => setDriverWhatsapp(e.target.value)}
                 placeholder="+994 50 123 45 67"
                 className="mt-1.5 w-full min-h-[48px] rounded-xl border border-slate-300 bg-white px-4 font-mono tabular-nums text-base text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-600/20"
-                required
               />
             </div>
 
-            {/* Terms Checkbox */}
-            <div className="flex items-start gap-3 pt-1">
+            {/* Terms Checkbox (full row clickable) */}
+            <div
+              onClick={() => setAcceptedTerms((v) => !v)}
+              className="flex cursor-pointer items-start gap-3 rounded-xl p-2 -mx-2 hover:bg-slate-50 select-none"
+            >
               <button
                 type="button"
                 role="checkbox"
                 aria-checked={acceptedTerms}
-                onClick={() => setAcceptedTerms((v) => !v)}
-                className={`mt-0.5 flex h-7 w-7 min-h-[44px] min-w-[44px] -ml-2 -mt-2 items-center justify-center rounded-xl transition-colors`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAcceptedTerms((v) => !v);
+                }}
+                className="flex h-7 w-7 min-h-[44px] min-w-[44px] -ml-1 -my-1.5 items-center justify-center rounded-xl transition-colors shrink-0"
               >
                 <span
                   className={`flex h-6 w-6 items-center justify-center rounded-md border transition-colors ${
@@ -364,7 +410,10 @@ export const DriverView: React.FC<DriverViewProps> = ({
               <p className="text-xs leading-relaxed text-slate-600 pt-1">
                 <button
                   type="button"
-                  onClick={() => onOpenLegal('terms')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenLegal('terms');
+                  }}
                   className="font-semibold text-slate-900 underline underline-offset-2 hover:text-orange-700"
                 >
                   İstifadəçi razılaşması
@@ -372,7 +421,10 @@ export const DriverView: React.FC<DriverViewProps> = ({
                 və{' '}
                 <button
                   type="button"
-                  onClick={() => onOpenLegal('privacy')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenLegal('privacy');
+                  }}
                   className="font-semibold text-slate-900 underline underline-offset-2 hover:text-orange-700"
                 >
                   Məxfilik siyasəti
