@@ -1420,6 +1420,56 @@ async function startServer() {
   const server = http.createServer(app);
 
   if (!IS_PROD) {
+    app.get('/manifest.webmanifest', (_req, res) => {
+      res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.json({
+        id: '/',
+        name: 'Şərur AvtoZapcast — Ehtiyat Hissələri Axtarışı',
+        short_name: 'Şərur Avto',
+        description: 'Şərurda bütün mağazalara və ölüxanalara 1 sorğu göndər, real vaxtda qiymət al.',
+        theme_color: '#0B1120',
+        background_color: '#F4F6FA',
+        display: 'standalone',
+        start_url: '/',
+        scope: '/',
+        icons: [
+          {
+            src: '/pwa-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: '/pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: '/pwa-maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+        shortcuts: [
+          {
+            name: 'Mağaza kabineti',
+            short_name: 'Mağaza',
+            url: '/?tab=shop',
+            icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+          },
+          {
+            name: 'Yeni sorğu',
+            short_name: 'Sorğu',
+            url: '/',
+            icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+          },
+        ],
+      });
+    });
+
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {

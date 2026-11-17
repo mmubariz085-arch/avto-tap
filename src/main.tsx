@@ -4,6 +4,22 @@ import App from './App.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './index.css';
 
+declare global {
+  interface Window {
+    __avtotapDeferredPrompt?: Event | null;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    window.__avtotapDeferredPrompt = e;
+  });
+  window.addEventListener('appinstalled', () => {
+    window.__avtotapDeferredPrompt = null;
+  });
+}
+
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   if (import.meta.env.PROD) {
     const hadController = Boolean(navigator.serviceWorker.controller);

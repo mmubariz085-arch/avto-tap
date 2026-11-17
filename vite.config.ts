@@ -107,6 +107,17 @@ export default defineConfig(() => {
         },
       }),
       {
+        name: 'dev-manifest-link',
+        apply: 'serve',
+        transformIndexHtml(html) {
+          if (html.includes('rel="manifest"')) return html;
+          return html.replace(
+            '<link rel="apple-touch-icon" href="/apple-touch-icon.png" />',
+            '<link rel="manifest" href="/manifest.webmanifest" />\n    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />'
+          );
+        },
+      },
+      {
         name: 'copy-unbundled-src-assets',
         apply: 'build',
         closeBundle(error?: Error): void {
