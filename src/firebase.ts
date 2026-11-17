@@ -95,6 +95,24 @@ async function testConnection() {
 }
 void testConnection();
 
+export function resolveFirebaseUserEmail(user: User | null | undefined): string {
+  if (!user) return '';
+  const providerEmail =
+    user.providerData?.find((p) => p?.providerId === 'google.com' && Boolean(p?.email))?.email ||
+    user.providerData?.find((p) => Boolean(p?.email))?.email ||
+    user.providerData?.[0]?.email ||
+    '';
+  return (user.email || providerEmail).trim().toLowerCase();
+}
+
+export function isFirebaseUserVerified(user: User | null | undefined): boolean {
+  if (!user) return false;
+  if (user.emailVerified) return true;
+  return Boolean(
+    user.providerData?.some((p) => p?.providerId === 'google.com' && Boolean(p?.email))
+  );
+}
+
 export async function signInWithGmail(): Promise<User> {
   const cred = await signInWithPopup(auth, googleProvider);
   return cred.user;
@@ -154,8 +172,8 @@ export async function syncUserProfileToFirestore(
   user: User,
   role: 'admin' | 'shop'
 ): Promise<void> {
-  const email = (user.email || '').trim().toLowerCase();
-  if (!email || !user.emailVerified) return;
+  const email = resolveFirebaseUserEmail(user);
+  if (!email || !isFirebaseUserVerified(user)) return;
 
   const userPath = `users/${user.uid}`;
   try {
@@ -201,7 +219,7 @@ export async function syncShopToFirestore(
   options: { asAdmin?: boolean } = {}
 ): Promise<void> {
   const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.emailVerified) return;
+  if (!currentUser || !isFirebaseUserVerified(currentUser)) return;
 
   const path = `shops/${shop.id}`;
   try {
@@ -211,7 +229,9 @@ export async function syncShopToFirestore(
     const safeDistrict = (shop.district || '').trim().slice(0, 80);
     const safeTelegram = (shop.telegramChatId || '').trim().slice(0, 40);
     const safeOwnerUid = (shop.ownerUid || currentUser.uid).slice(0, 128);
-    const safeOwnerEmail = (shop.ownerEmail || currentUser.email || '').trim().slice(0, 200);
+    const safeOwnerEmail = (shop.ownerEmail || resolveFirebaseUserEmail(currentUser))
+      .trim()
+      .slice(0, 200);
 
     if (!snap.exists()) {
       await setDoc(shopRef, {
@@ -259,7 +279,7 @@ export async function syncShopToFirestore(
 
 export async function loadAllShopsFromFirestoreForAdmin(): Promise<Shop[]> {
   const currentUser = auth.currentUser;
-  if (!currentUser || (currentUser.email || '').toLowerCase() !== ADMIN_EMAIL) {
+  if (!currentUser || resolveFirebaseUserEmail(currentUser) !== ADMIN_EMAIL) {
     return [];
   }
   const path = 'shops';
@@ -321,7 +341,7 @@ export async function loadMyShopFromFirestore(uid: string): Promise<Shop | null>
 
 export async function deleteShopFromFirestore(shopId: string): Promise<void> {
   const currentUser = auth.currentUser;
-  if (!currentUser || (currentUser.email || '').toLowerCase() !== ADMIN_EMAIL) return;
+  if (!currentUser || resolveFirebaseUserEmail(currentUser) !== ADMIN_EMAIL) return;
   const path = `shops/${shopId}`;
   try {
     await deleteDoc(doc(db, 'shops', shopId));

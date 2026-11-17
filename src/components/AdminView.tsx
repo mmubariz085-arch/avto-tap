@@ -43,9 +43,11 @@ import { UnauthorizedDomainNotice } from './UnauthorizedDomainNotice';
 import {
   ADMIN_EMAIL,
   deleteShopFromFirestore,
+  isFirebaseUserVerified,
   isUnauthorizedDomainError,
   loadAllShopsFromFirestoreForAdmin,
   mapFirebaseAuthErrorAz,
+  resolveFirebaseUserEmail,
   signInWithGmail,
   signOutFirebase,
   syncShopToFirestore,
@@ -378,8 +380,8 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     setIsGoogleLoggingIn(true);
     try {
       const user = await signInWithGmail();
-      const email = (user.email || '').trim().toLowerCase();
-      if (!user.emailVerified || email !== ADMIN_EMAIL) {
+      const email = resolveFirebaseUserEmail(user);
+      if (!isFirebaseUserVerified(user) || email !== ADMIN_EMAIL) {
         await signOutFirebase();
         setLoginError(
           `Bu Gmail (${email || 'naməlum'}) admin deyil. Zəhmət olmasa ${ADMIN_EMAIL} hesabı ilə daxil olun.`

@@ -35,6 +35,7 @@ import {
   isUnauthorizedDomainError,
   loadMyShopFromFirestore,
   mapFirebaseAuthErrorAz,
+  resolveFirebaseUserEmail,
   signInWithGmail,
   signOutFirebase,
   syncShopToFirestore,
@@ -560,7 +561,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
 
       setPendingGoogleReg({
         uid: user.uid,
-        email: (user.email || result.data.email || '').toLowerCase(),
+        email: resolveFirebaseUserEmail(user) || (result.data.email || '').trim().toLowerCase(),
         displayName: user.displayName || result.data.displayName || '',
       });
     } catch (err) {

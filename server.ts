@@ -160,17 +160,37 @@ async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFirebaseU
         email?: string;
         emailVerified?: boolean;
         displayName?: string;
+        providerUserInfo?: Array<{
+          providerId?: string;
+          email?: string;
+          displayName?: string;
+        }>;
       }>;
     };
     const user = data.users?.[0];
-    if (!user?.localId || !user?.email || !user.emailVerified) {
+    const googleProvider = user?.providerUserInfo?.find(
+      (p) => p?.providerId === 'google.com' && Boolean(p?.email)
+    );
+    const fallbackProvider =
+      user?.providerUserInfo?.find((p) => Boolean(p?.email)) || user?.providerUserInfo?.[0];
+    const resolvedEmail = (
+      user?.email ||
+      googleProvider?.email ||
+      fallbackProvider?.email ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const isVerified = Boolean(user?.emailVerified) || Boolean(googleProvider?.email);
+
+    if (!user?.localId || !resolvedEmail || !isVerified) {
       return null;
     }
     return {
       uid: user.localId,
-      email: user.email.trim().toLowerCase(),
-      emailVerified: Boolean(user.emailVerified),
-      displayName: user.displayName?.trim(),
+      email: resolvedEmail,
+      emailVerified: isVerified,
+      displayName: user.displayName?.trim() || googleProvider?.displayName?.trim(),
     };
   } catch {
     return null;
