@@ -42,6 +42,7 @@ import { QrPosterModal } from './QrPosterModal';
 import { UnauthorizedDomainNotice } from './UnauthorizedDomainNotice';
 import {
   ADMIN_EMAIL,
+  consumeGmailRedirectResult,
   deleteShopFromFirestore,
   isFirebaseUserVerified,
   isUnauthorizedDomainError,
@@ -110,7 +111,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   });
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [showPasswordFallback, setShowPasswordFallback] = useState(false);
+  const [showPasswordFallback, setShowPasswordFallback] = useState(true);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [unauthorizedDomain, setUnauthorizedDomain] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -183,15 +184,21 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
   useEffect(() => {
     void requestPersistentPhoneStorage().then(() => refreshPhoneStorageInfo());
-    if (!token) {
+    let hasLocalToken = false;
+    try {
+      hasLocalToken = Boolean(localStorage.getItem('avtotap_admin_token'));
+    } catch {
+      hasLocalToken = false;
+    }
+    if (!hasLocalToken) {
       void loadAuthTokenFromPhone('admin').then((savedToken) => {
         if (savedToken) {
-          setToken(savedToken);
+          setToken((prev) => prev || savedToken);
           setLoading(true);
         }
       });
     }
-  }, [refreshPhoneStorageInfo, token]);
+  }, [refreshPhoneStorageInfo]);
 
   const fetchDashboard = useCallback(async (activeToken: string, forceSaveEmpty = false) => {
     try {
@@ -222,7 +229,13 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       }
 
       if (res.status === 401 && data && typeof data.error === 'string') {
+        try {
+          localStorage.removeItem('avtotap_admin_token');
+        } catch {
+          // ignore
+        }
         void clearAuthTokenFromPhone('admin');
+        setLoginError('Admin sessiyası bitdi və ya etibarsızdır. Yenidən daxil olun.');
         setToken(null);
         return;
       }
@@ -373,13 +386,8 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     };
   }, [token, fetchDashboard]);
 
-  const handleGoogleLogin = async () => {
-    if (isGoogleLoggingIn || isLoggingIn) return;
-    setLoginError(null);
-    setUnauthorizedDomain(false);
-    setIsGoogleLoggingIn(true);
-    try {
-      const user = await signInWithGmail();
+  const completeGoogleAdminSignIn = useCallback(
+    async (user: NonNullable<Awaited<ReturnType<typeof signInWithGmail>>>) => {
       const email = resolveFirebaseUserEmail(user);
       if (!isFirebaseUserVerified(user) || email !== ADMIN_EMAIL) {
         await signOutFirebase();
@@ -401,20 +409,58 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       }
 
       try {
-        await syncUserProfileToFirestore(user, 'admin');
+        localStorage.setItem('avtotap_admin_token', result.data.token);
       } catch {
-        // non-blocking firestore profile sync
+        // ignore
       }
-
-      await saveAuthTokenToPhone('admin', result.data.token);
       setToken(result.data.token);
       setPassword('');
       setLoading(true);
+      void saveAuthTokenToPhone('admin', result.data.token);
+      void syncUserProfileToFirestore(user, 'admin').catch(() => {});
+    },
+    []
+  );
+
+  useEffect(() => {
+    let active = true;
+    void consumeGmailRedirectResult()
+      .then((redirectUser) => {
+        if (!active || !redirectUser) return;
+        setIsGoogleLoggingIn(true);
+        return completeGoogleAdminSignIn(redirectUser).finally(() => {
+          if (active) setIsGoogleLoggingIn(false);
+        });
+      })
+      .catch((err) => {
+        if (!active) return;
+        if (isUnauthorizedDomainError(err)) {
+          setUnauthorizedDomain(true);
+          setShowPasswordFallback(true);
+        }
+        setLoginError(mapFirebaseAuthErrorAz(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, [completeGoogleAdminSignIn]);
+
+  const handleGoogleLogin = async () => {
+    if (isGoogleLoggingIn || isLoggingIn) return;
+    setLoginError(null);
+    setUnauthorizedDomain(false);
+    setIsGoogleLoggingIn(true);
+    try {
+      const user = await signInWithGmail();
+      if (!user) {
+        return;
+      }
+      await completeGoogleAdminSignIn(user);
     } catch (err) {
       if (isUnauthorizedDomainError(err)) {
         setUnauthorizedDomain(true);
-        setShowPasswordFallback(true);
       }
+      setShowPasswordFallback(true);
       setLoginError(mapFirebaseAuthErrorAz(err));
     } finally {
       setIsGoogleLoggingIn(false);
@@ -436,18 +482,31 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         setLoginError(result.data.error || 'Şifrə yanlışdır.');
         return;
       }
-      await saveAuthTokenToPhone('admin', result.data.token);
+      try {
+        localStorage.setItem('avtotap_admin_token', result.data.token);
+      } catch {
+        // ignore
+      }
       setToken(result.data.token);
       setPassword('');
       setLoading(true);
+      void saveAuthTokenToPhone('admin', result.data.token);
+    } catch {
+      setLoginError('Giriş zamanı gözlənilməz xəta baş verdi. Yenidən cəhd edin.');
     } finally {
       setIsLoggingIn(false);
     }
   };
 
   const handleLogout = () => {
+    try {
+      localStorage.removeItem('avtotap_admin_token');
+    } catch {
+      // ignore
+    }
     void clearAuthTokenFromPhone('admin');
     void signOutFirebase();
+    setLoginError(null);
     setToken(null);
     setShops([]);
     setRequests([]);
@@ -823,6 +882,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                     <input
                       id="admin-password"
                       type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
                       autoCapitalize="none"
                       autoCorrect="off"
                       spellCheck={false}

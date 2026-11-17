@@ -25,6 +25,13 @@ function openPhoneDb(): Promise<IDBDatabase | null> {
   }
   if (!dbPromise) {
     dbPromise = new Promise((resolve) => {
+      let settled = false;
+      const done = (result: IDBDatabase | null) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      const timer = window.setTimeout(() => done(null), 900);
       try {
         const req = window.indexedDB.open(DB_NAME, DB_VERSION);
         req.onupgradeneeded = () => {
@@ -33,10 +40,21 @@ function openPhoneDb(): Promise<IDBDatabase | null> {
             db.createObjectStore(STORE_KV);
           }
         };
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(null);
+        req.onsuccess = () => {
+          window.clearTimeout(timer);
+          done(req.result);
+        };
+        req.onerror = () => {
+          window.clearTimeout(timer);
+          done(null);
+        };
+        req.onblocked = () => {
+          window.clearTimeout(timer);
+          done(null);
+        };
       } catch {
-        resolve(null);
+        window.clearTimeout(timer);
+        done(null);
       }
     });
   }
@@ -74,25 +92,43 @@ export async function getPhoneStorageStats(): Promise<{
   return { persisted, usedKb };
 }
 
+function readLocalFallback<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(`avtotap_idb_${key}`);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function idbGet<T>(key: string): Promise<T | null> {
   const db = await openPhoneDb();
   if (!db) {
-    try {
-      const raw = localStorage.getItem(`avtotap_idb_${key}`);
-      return raw ? (JSON.parse(raw) as T) : null;
-    } catch {
-      return null;
-    }
+    return readLocalFallback<T>(key);
   }
   return new Promise((resolve) => {
+    let settled = false;
+    const done = (val: T | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+    };
+    const timer = window.setTimeout(() => done(readLocalFallback<T>(key)), 900);
     try {
       const tx = db.transaction(STORE_KV, 'readonly');
       const store = tx.objectStore(STORE_KV);
       const req = store.get(key);
-      req.onsuccess = () => resolve((req.result as T) ?? null);
-      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        window.clearTimeout(timer);
+        done((req.result as T) ?? readLocalFallback<T>(key));
+      };
+      req.onerror = () => {
+        window.clearTimeout(timer);
+        done(readLocalFallback<T>(key));
+      };
     } catch {
-      resolve(null);
+      window.clearTimeout(timer);
+      done(readLocalFallback<T>(key));
     }
   });
 }
@@ -106,14 +142,32 @@ async function idbSet<T>(key: string, value: T): Promise<void> {
   const db = await openPhoneDb();
   if (!db) return;
   return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const timer = window.setTimeout(done, 900);
     try {
       const tx = db.transaction(STORE_KV, 'readwrite');
       const store = tx.objectStore(STORE_KV);
       store.put(value, key);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
+      tx.oncomplete = () => {
+        window.clearTimeout(timer);
+        done();
+      };
+      tx.onerror = () => {
+        window.clearTimeout(timer);
+        done();
+      };
+      tx.onabort = () => {
+        window.clearTimeout(timer);
+        done();
+      };
     } catch {
-      resolve();
+      window.clearTimeout(timer);
+      done();
     }
   });
 }
@@ -127,14 +181,32 @@ async function idbDelete(key: string): Promise<void> {
   const db = await openPhoneDb();
   if (!db) return;
   return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const timer = window.setTimeout(done, 900);
     try {
       const tx = db.transaction(STORE_KV, 'readwrite');
       const store = tx.objectStore(STORE_KV);
       store.delete(key);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
+      tx.oncomplete = () => {
+        window.clearTimeout(timer);
+        done();
+      };
+      tx.onerror = () => {
+        window.clearTimeout(timer);
+        done();
+      };
+      tx.onabort = () => {
+        window.clearTimeout(timer);
+        done();
+      };
     } catch {
-      resolve();
+      window.clearTimeout(timer);
+      done();
     }
   });
 }

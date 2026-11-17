@@ -32,6 +32,7 @@ import { PushNotificationsButton } from './PushNotificationsButton';
 import { UnauthorizedDomainNotice } from './UnauthorizedDomainNotice';
 import {
   auth,
+  consumeGmailRedirectResult,
   isUnauthorizedDomainError,
   loadMyShopFromFirestore,
   mapFirebaseAuthErrorAz,
@@ -131,18 +132,27 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
 
-  // Hydrate token, cached shop profile, & cached feed from phone memory on mount
+  // Hydrate token once on mount if localStorage was cleared by OS/WebView
   useEffect(() => {
-    if (!token) {
+    let hasLocalToken = false;
+    try {
+      hasLocalToken = Boolean(localStorage.getItem('avtotap_shop_token'));
+    } catch {
+      hasLocalToken = false;
+    }
+    if (!hasLocalToken) {
       void loadAuthTokenFromPhone('shop').then((savedToken) => {
         if (savedToken) {
-          setToken(savedToken);
+          setToken((prev) => prev || savedToken);
           setLoading(true);
         }
       });
-      return;
     }
+  }, []);
 
+  // Hydrate cached shop profile & feed from phone memory when token is active
+  useEffect(() => {
+    if (!token) return;
     void Promise.all([loadShopProfileFromPhone(), loadShopFeedFromPhone()]).then(
       ([profileCache, feedCache]) => {
         if (profileCache?.shop) {
@@ -191,9 +201,15 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       }
 
       if (res.status === 401 && data && typeof data.error === 'string') {
+        try {
+          localStorage.removeItem('avtotap_shop_token');
+        } catch {
+          // ignore
+        }
         void clearAuthTokenFromPhone('shop');
         void clearPreferredSection();
         void clearShopProfileFromPhone();
+        setLoginError('Sessiya bitdi. Yenidən daxil olun.');
         setToken(null);
         setShop(null);
         setFeed([]);
@@ -457,35 +473,34 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
         setLoginError(result.data.error || 'Giriş alınmadı.');
         return;
       }
-      await saveAuthTokenToPhone('shop', result.data.token);
-      await savePreferredSection('shop');
-      await saveShopProfileToPhone(
-        result.data.shop as unknown as Record<string, unknown>,
-        result.data.adminWhatsapp || ''
-      );
-      localStorage.setItem('avtotap_shop_phone', loginPhone.trim());
+      try {
+        localStorage.setItem('avtotap_shop_token', result.data.token);
+        localStorage.setItem('avtotap_shop_phone', loginPhone.trim());
+        localStorage.setItem('avtotap_preferred_section', 'shop');
+      } catch {
+        // ignore
+      }
       setToken(result.data.token);
       setShop(result.data.shop);
       setAdminWhatsapp(result.data.adminWhatsapp || '');
       setLoading(true);
+      void saveAuthTokenToPhone('shop', result.data.token);
+      void savePreferredSection('shop');
+      void saveShopProfileToPhone(
+        result.data.shop as unknown as Record<string, unknown>,
+        result.data.adminWhatsapp || ''
+      );
+    } catch {
+      setLoginError('Giriş zamanı gözlənilməz xəta baş verdi. Yenidən cəhd edin.');
     } finally {
       setIsLoggingIn(false);
     }
   };
 
-  const handleShopGoogleLogin = async () => {
-    if (isGoogleLoading || isLoggingIn || isRegistering) return;
-    setLoginError(null);
-    setUnauthorizedDomain(false);
-    setIsGoogleLoading(true);
-    try {
-      const user = await signInWithGmail();
+  const completeShopGoogleSignIn = useCallback(
+    async (user: NonNullable<Awaited<ReturnType<typeof signInWithGmail>>>) => {
       const idToken = await user.getIdToken();
-      try {
-        await syncUserProfileToFirestore(user, 'shop');
-      } catch {
-        // non-blocking
-      }
+      void syncUserProfileToFirestore(user, 'shop').catch(() => {});
 
       const result = await postJsonWithRetry<{
         registered?: boolean;
@@ -508,17 +523,23 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       }
 
       if (result.data.registered && result.data.token && result.data.shop) {
-        await saveAuthTokenToPhone('shop', result.data.token);
-        await savePreferredSection('shop');
-        await saveShopProfileToPhone(
-          result.data.shop as unknown as Record<string, unknown>,
-          result.data.adminWhatsapp || ''
-        );
+        try {
+          localStorage.setItem('avtotap_shop_token', result.data.token);
+          localStorage.setItem('avtotap_preferred_section', 'shop');
+        } catch {
+          // ignore
+        }
         setPendingGoogleReg(null);
         setToken(result.data.token);
         setShop(result.data.shop);
         setAdminWhatsapp(result.data.adminWhatsapp || '');
         setLoading(true);
+        void saveAuthTokenToPhone('shop', result.data.token);
+        void savePreferredSection('shop');
+        void saveShopProfileToPhone(
+          result.data.shop as unknown as Record<string, unknown>,
+          result.data.adminWhatsapp || ''
+        );
         return;
       }
 
@@ -541,17 +562,23 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             { retries: 1, timeoutMs: 15000 }
           );
           if (restored.ok && restored.data.token && restored.data.shop) {
-            await saveAuthTokenToPhone('shop', restored.data.token);
-            await savePreferredSection('shop');
-            await saveShopProfileToPhone(
-              restored.data.shop as unknown as Record<string, unknown>,
-              restored.data.adminWhatsapp || ''
-            );
+            try {
+              localStorage.setItem('avtotap_shop_token', restored.data.token);
+              localStorage.setItem('avtotap_preferred_section', 'shop');
+            } catch {
+              // ignore
+            }
             setPendingGoogleReg(null);
             setToken(restored.data.token);
             setShop(restored.data.shop);
             setAdminWhatsapp(restored.data.adminWhatsapp || '');
             setLoading(true);
+            void saveAuthTokenToPhone('shop', restored.data.token);
+            void savePreferredSection('shop');
+            void saveShopProfileToPhone(
+              restored.data.shop as unknown as Record<string, unknown>,
+              restored.data.adminWhatsapp || ''
+            );
             return;
           }
         }
@@ -564,9 +591,48 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
         email: resolveFirebaseUserEmail(user) || (result.data.email || '').trim().toLowerCase(),
         displayName: user.displayName || result.data.displayName || '',
       });
+    },
+    []
+  );
+
+  useEffect(() => {
+    let active = true;
+    void consumeGmailRedirectResult()
+      .then((redirectUser) => {
+        if (!active || !redirectUser) return;
+        setIsGoogleLoading(true);
+        return completeShopGoogleSignIn(redirectUser).finally(() => {
+          if (active) setIsGoogleLoading(false);
+        });
+      })
+      .catch((err) => {
+        if (!active) return;
+        if (isUnauthorizedDomainError(err)) {
+          setUnauthorizedDomain(true);
+          setShowPinFallback(true);
+        }
+        setLoginError(mapFirebaseAuthErrorAz(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, [completeShopGoogleSignIn]);
+
+  const handleShopGoogleLogin = async () => {
+    if (isGoogleLoading || isLoggingIn || isRegistering) return;
+    setLoginError(null);
+    setUnauthorizedDomain(false);
+    setIsGoogleLoading(true);
+    try {
+      const user = await signInWithGmail();
+      if (!user) {
+        return;
+      }
+      await completeShopGoogleSignIn(user);
     } catch (err) {
       if (isUnauthorizedDomainError(err)) {
         setUnauthorizedDomain(true);
+        setShowPinFallback(true);
       }
       setLoginError(mapFirebaseAuthErrorAz(err));
     } finally {
@@ -619,24 +685,26 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
         pin: '0000',
         createdAt: new Date().toISOString(),
       };
-      try {
-        await syncUserProfileToFirestore(currentUser, 'shop');
-        await syncShopToFirestore(fullShop);
-      } catch {
-        // non-blocking firestore sync
-      }
+      void syncUserProfileToFirestore(currentUser, 'shop').catch(() => {});
+      void syncShopToFirestore(fullShop).catch(() => {});
 
-      await saveAuthTokenToPhone('shop', result.data.token);
-      await savePreferredSection('shop');
-      await saveShopProfileToPhone(
-        result.data.shop as unknown as Record<string, unknown>,
-        result.data.adminWhatsapp || ''
-      );
+      try {
+        localStorage.setItem('avtotap_shop_token', result.data.token);
+        localStorage.setItem('avtotap_preferred_section', 'shop');
+      } catch {
+        // ignore
+      }
       setPendingGoogleReg(null);
       setToken(result.data.token);
       setShop(result.data.shop);
       setAdminWhatsapp(result.data.adminWhatsapp || '');
       setLoading(true);
+      void saveAuthTokenToPhone('shop', result.data.token);
+      void savePreferredSection('shop');
+      void saveShopProfileToPhone(
+        result.data.shop as unknown as Record<string, unknown>,
+        result.data.adminWhatsapp || ''
+      );
     } catch (err) {
       setLoginError(mapFirebaseAuthErrorAz(err));
     } finally {
@@ -645,10 +713,17 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   };
 
   const handleLogout = () => {
+    try {
+      localStorage.removeItem('avtotap_shop_token');
+      localStorage.removeItem('avtotap_preferred_section');
+    } catch {
+      // ignore
+    }
     void clearAuthTokenFromPhone('shop');
     void clearPreferredSection();
     void clearShopProfileFromPhone();
     void signOutFirebase();
+    setLoginError(null);
     setPendingGoogleReg(null);
     setToken(null);
     setShop(null);

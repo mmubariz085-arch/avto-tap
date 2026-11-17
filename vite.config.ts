@@ -66,7 +66,7 @@ export default defineConfig(() => {
           skipWaiting: true,
           clientsClaim: true,
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//, /^\/ws/, /^\/dev-sw\.js/, /^\/sw\.js/, /^\/workbox-/],
+          navigateFallbackDenylist: [/^\/api\//, /^\/ws/, /^\/__\//, /^\/dev-sw\.js/, /^\/sw\.js/, /^\/workbox-/],
           runtimeCaching: [
             {
               urlPattern: /^\/api\/.*/i,
@@ -103,8 +103,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
-          type: 'classic',
+          enabled: false,
         },
       }),
       {

@@ -1,8 +1,10 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   type User,
 } from 'firebase/auth';
@@ -113,9 +115,34 @@ export function isFirebaseUserVerified(user: User | null | undefined): boolean {
   );
 }
 
-export async function signInWithGmail(): Promise<User> {
-  const cred = await signInWithPopup(auth, googleProvider);
-  return cred.user;
+export async function signInWithGmail(): Promise<User | null> {
+  try {
+    const cred = await signInWithPopup(auth, googleProvider);
+    return cred.user;
+  } catch (err) {
+    const code = (err as { code?: string })?.code || '';
+    if (
+      code === 'auth/popup-blocked' ||
+      code === 'auth/operation-not-supported-in-this-environment'
+    ) {
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+    throw err;
+  }
+}
+
+export async function consumeGmailRedirectResult(): Promise<User | null> {
+  try {
+    const res = await getRedirectResult(auth);
+    return res?.user ?? null;
+  } catch (err) {
+    const code = (err as { code?: string })?.code || '';
+    if (code === 'auth/unauthorized-domain') {
+      throw err;
+    }
+    return null;
+  }
 }
 
 export async function signOutFirebase(): Promise<void> {
@@ -162,8 +189,11 @@ export function mapFirebaseAuthErrorAz(err: unknown): string {
   if (code === 'auth/unauthorized-domain') {
     const { hostname } = getUnauthorizedDomainSetupInfo();
     return hostname
-      ? `Bu domen (${hostname}) Firebase Auth icazə siyahısında yoxdur.`
-      : 'Bu domen Firebase Auth siyahısında icazəli deyil.';
+      ? `Bu domen (${hostname}) Firebase Auth icazə siyahısında yoxdur. Aşağıda şifrə ilə də daxil ola bilərsiniz.`
+      : 'Bu domen Firebase Auth siyahısında icazəli deyil. Aşağıda şifrə ilə də daxil ola bilərsiniz.';
+  }
+  if (code === 'auth/operation-not-supported-in-this-environment') {
+    return 'Bu brauzerdə Google açılan pəncərəsi dəstəklənmir. Şifrə ilə daxil olun və ya standart brauzerdə açın.';
   }
   return 'Gmail ilə giriş zamanı xəta baş verdi. Yenidən cəhd edin.';
 }

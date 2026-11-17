@@ -10,11 +10,28 @@ export const UnauthorizedDomainNotice: React.FC = () => {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(hostname);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(hostname);
+      } else {
+        throw new Error('clipboard-unavailable');
+      }
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      // ignore clipboard restriction
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = hostname;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2000);
+      } catch {
+        // ignore clipboard restriction
+      }
     }
   };
 

@@ -1018,21 +1018,28 @@ async function startServer() {
         return;
       }
 
+      let rawEnvPw = String(process.env.ADMIN_PASSWORD || '').trim();
+      if (
+        (rawEnvPw.startsWith('"') && rawEnvPw.endsWith('"')) ||
+        (rawEnvPw.startsWith("'") && rawEnvPw.endsWith("'"))
+      ) {
+        rawEnvPw = rawEnvPw.slice(1, -1).trim();
+      }
+
       let isValid = false;
       if (db.settings.adminPasswordHash) {
         isValid = verifyAdminPassword(given, db.settings.adminPasswordHash);
       } else {
-        let rawExpected = String(process.env.ADMIN_PASSWORD || '').trim();
-        if (
-          (rawExpected.startsWith('"') && rawExpected.endsWith('"')) ||
-          (rawExpected.startsWith("'") && rawExpected.endsWith("'"))
-        ) {
-          rawExpected = rawExpected.slice(1, -1).trim();
-        }
-        const expected = rawExpected || 'Mubulu394148412345';
+        const expected = rawEnvPw || 'Mubulu394148412345';
         const givenBuf = Buffer.from(given);
         const expectedBuf = Buffer.from(expected);
         isValid = givenBuf.length === expectedBuf.length && crypto.timingSafeEqual(givenBuf, expectedBuf);
+      }
+
+      if (!isValid && rawEnvPw) {
+        const givenBuf = Buffer.from(given);
+        const envBuf = Buffer.from(rawEnvPw);
+        isValid = givenBuf.length === envBuf.length && crypto.timingSafeEqual(givenBuf, envBuf);
       }
 
       if (!isValid) {
@@ -1424,11 +1431,17 @@ async function startServer() {
 
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
-    const pathname = new URL(req.url || '/', `http://localhost:${PORT}`).pathname;
-    if (pathname === '/ws') {
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit('connection', ws, req);
-      });
+    try {
+      const pathname = new URL(req.url || '/', `http://localhost:${PORT}`).pathname;
+      if (pathname === '/ws') {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit('connection', ws, req);
+        });
+      } else {
+        socket.destroy();
+      }
+    } catch {
+      socket.destroy();
     }
   });
   wss.on('connection', (ws, req) => {
