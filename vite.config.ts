@@ -43,6 +43,20 @@ export default defineConfig(() => {
               purpose: 'maskable',
             },
           ],
+          shortcuts: [
+            {
+              name: 'Mağaza kabineti',
+              short_name: 'Mağaza',
+              url: '/?tab=shop',
+              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+            },
+            {
+              name: 'Yeni sorğu',
+              short_name: 'Sorğu',
+              url: '/',
+              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+            },
+          ],
         },
         workbox: {
           importScripts: ['/sw-push.js'],

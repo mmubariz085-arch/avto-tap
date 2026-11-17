@@ -26,12 +26,16 @@ import {
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
 import { triggerAlertFeedback } from '../utils/notify';
+import { postJsonWithRetry } from '../utils/api';
 import {
   type AdminPhoneBackup,
+  clearAuthTokenFromPhone,
   getPhoneStorageStats,
   loadAdminBackupFromPhone,
+  loadAuthTokenFromPhone,
   requestPersistentPhoneStorage,
   saveAdminBackupToPhone,
+  saveAuthTokenToPhone,
 } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import { QrPosterModal } from './QrPosterModal';
@@ -121,6 +125,9 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   const [adminAlertBanner, setAdminAlertBanner] = useState<string | null>(null);
   const [showQrModal, setShowQrModal] = useState(false);
 
+  const settingsRef = useRef<AdminSettings>(settings);
+  settingsRef.current = settings;
+
   const refreshPhoneStorageInfo = useCallback(async () => {
     const [backup, stats] = await Promise.all([
       loadAdminBackupFromPhone(),
@@ -132,49 +139,79 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
   useEffect(() => {
     void requestPersistentPhoneStorage().then(() => refreshPhoneStorageInfo());
-  }, [refreshPhoneStorageInfo]);
+    if (!token) {
+      void loadAuthTokenFromPhone('admin').then((savedToken) => {
+        if (savedToken) {
+          setToken(savedToken);
+          setLoading(true);
+        }
+      });
+    }
+  }, [refreshPhoneStorageInfo, token]);
 
-  const fetchDashboard = useCallback(
-    async (activeToken: string, forceSaveEmpty = false) => {
+  const fetchDashboard = useCallback(async (activeToken: string, forceSaveEmpty = false) => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+      const res = await fetch('/api/admin/dashboard', {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+          Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      window.clearTimeout(timeoutId);
+
+      const rawText = await res.text();
+      let data: {
+        error?: string;
+        shops?: AdminShopRow[];
+        requests?: RequestWithQuotes[];
+        settings?: AdminSettings;
+      } | null = null;
       try {
-        const res = await fetch('/api/admin/dashboard', {
-          headers: { Authorization: `Bearer ${activeToken}` },
-          cache: 'no-store',
-        });
-        if (res.status === 401) {
-          localStorage.removeItem('avtotap_admin_token');
-          setToken(null);
-          return;
-        }
-        const data = await res.json();
-        const nextShops: AdminShopRow[] = Array.isArray(data.shops) ? data.shops : [];
-        const nextRequests: RequestWithQuotes[] = Array.isArray(data.requests) ? data.requests : [];
-        const nextSettings: AdminSettings = data.settings || settings;
-
-        setShops(nextShops);
-        setRequests(nextRequests);
-        if (data.settings) {
-          setSettings(nextSettings);
-          setAdminWaInput(nextSettings.adminWhatsapp || '');
-        }
-
-        // Preserve existing phone backup if server booted empty unless explicit edit occurred
-        const existingPhoneBackup = await loadAdminBackupFromPhone();
-        if (nextShops.length > 0 || forceSaveEmpty || !existingPhoneBackup?.shops.length) {
-          const saved = await saveAdminBackupToPhone(nextShops, nextSettings);
-          setPhoneBackup(saved);
-        } else {
-          setPhoneBackup(existingPhoneBackup);
-        }
-        setStorageStats(await getPhoneStorageStats());
+        data = rawText ? JSON.parse(rawText) : {};
       } catch {
-        // ignore transient network issue
-      } finally {
-        setLoading(false);
+        data = null;
       }
-    },
-    [settings]
-  );
+
+      if (res.status === 401 && data && typeof data.error === 'string') {
+        void clearAuthTokenFromPhone('admin');
+        setToken(null);
+        return;
+      }
+      if (!res.ok || !data) {
+        return;
+      }
+
+      const nextShops: AdminShopRow[] = Array.isArray(data.shops) ? data.shops : [];
+      const nextRequests: RequestWithQuotes[] = Array.isArray(data.requests) ? data.requests : [];
+      const nextSettings: AdminSettings = data.settings || settingsRef.current;
+
+      setShops(nextShops);
+      setRequests(nextRequests);
+      if (data.settings) {
+        setSettings(nextSettings);
+        setAdminWaInput(nextSettings.adminWhatsapp || '');
+      }
+
+      // Preserve existing phone backup if server booted empty unless explicit edit occurred
+      const existingPhoneBackup = await loadAdminBackupFromPhone();
+      if (nextShops.length > 0 || forceSaveEmpty || !existingPhoneBackup?.shops.length) {
+        const saved = await saveAdminBackupToPhone(nextShops, nextSettings);
+        setPhoneBackup(saved);
+      } else {
+        setPhoneBackup(existingPhoneBackup);
+      }
+      setStorageStats(await getPhoneStorageStats());
+    } catch {
+      // ignore transient network issue; keep session and cached phone data
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (token) {
@@ -264,32 +301,30 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoggingIn) return;
     setLoginError(null);
     setIsLoggingIn(true);
     try {
-      const res = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setLoginError(data.error || 'Şifrə yanlışdır.');
+      const result = await postJsonWithRetry<{ token?: string; error?: string }>(
+        '/api/admin/login',
+        { password },
+        { retries: 2, timeoutMs: 15000 }
+      );
+      if (!result.ok || !result.data.token) {
+        setLoginError(result.data.error || 'Şifrə yanlışdır.');
         return;
       }
-      localStorage.setItem('avtotap_admin_token', data.token);
-      setToken(data.token);
+      await saveAuthTokenToPhone('admin', result.data.token);
+      setToken(result.data.token);
       setPassword('');
       setLoading(true);
-    } catch {
-      setLoginError('Server xətası baş verdi.');
     } finally {
       setIsLoggingIn(false);
     }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('avtotap_admin_token');
+    void clearAuthTokenFromPhone('admin');
     setToken(null);
     setShops([]);
     setRequests([]);

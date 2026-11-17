@@ -11,7 +11,7 @@ self.addEventListener('push', function (event) {
       const parsed = event.data.json();
       payload = Object.assign(payload, parsed);
     }
-  } catch (e) {
+  } catch (_e) {
     try {
       if (event.data) {
         payload.body = event.data.text();
@@ -22,16 +22,32 @@ self.addEventListener('push', function (event) {
   }
 
   event.waitUntil(
-    self.registration.showNotification(payload.title, {
-      body: payload.body,
-      icon: '/pwa-192x192.png',
-      badge: '/pwa-192x192.png',
-      vibrate: [300, 100, 300, 100, 350],
-      tag: payload.tag || 'avtotap-alert',
-      renotify: true,
-      requireInteraction: true,
-      data: { url: payload.url || '/' },
-    })
+    Promise.all([
+      self.registration.showNotification(payload.title, {
+        body: payload.body,
+        icon: '/pwa-192x192.png',
+        badge: '/pwa-192x192.png',
+        vibrate: [350, 120, 350, 120, 450],
+        tag: payload.tag || 'avtotap-alert',
+        renotify: true,
+        requireInteraction: true,
+        data: { url: payload.url || '/' },
+      }),
+      self.clients
+        .matchAll({ type: 'window', includeUncontrolled: true })
+        .then(function (clientList) {
+          for (let i = 0; i < clientList.length; i++) {
+            try {
+              clientList[i].postMessage({
+                type: 'PUSH_RECEIVED',
+                payload: payload,
+              });
+            } catch (_err) {
+              // ignore
+            }
+          }
+        }),
+    ])
   );
 });
 

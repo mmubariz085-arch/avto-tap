@@ -12,7 +12,11 @@ import { installGlobalAudioUnlocker } from './utils/notify';
 import {
   clearAllOrderSnapshotsFromPhone,
   deleteOrderSnapshotFromPhone,
+  loadAuthTokenFromPhone,
+  loadPreferredSection,
   requestPersistentPhoneStorage,
+  saveAuthTokenToPhone,
+  savePreferredSection,
 } from './utils/phoneStorage';
 import type { RequestWithQuotes } from './types';
 
@@ -40,6 +44,18 @@ export default function App() {
     }
     if (params.get('tab') === 'shop') {
       return 'shop';
+    }
+    if (!params.get('order') && !params.get('quickReply')) {
+      try {
+        if (
+          localStorage.getItem('avtotap_preferred_section') === 'shop' &&
+          localStorage.getItem('avtotap_shop_token')
+        ) {
+          return 'shop';
+        }
+      } catch {
+        // ignore
+      }
     }
     return 'driver';
   });
@@ -69,6 +85,25 @@ export default function App() {
 
   useEffect(() => {
     void requestPersistentPhoneStorage();
+
+    // If localStorage was cleared by OS/WebView, restore pinned Shop Cabinet from IndexedDB
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const hasExplicitDeepLink =
+        window.location.hash === '#admin' ||
+        params.get('panel') === 'admin' ||
+        Boolean(params.get('order')) ||
+        Boolean(params.get('quickReply'));
+      if (!hasExplicitDeepLink) {
+        void Promise.all([loadPreferredSection(), loadAuthTokenFromPhone('shop')]).then(
+          ([pref, savedShopToken]) => {
+            if (pref === 'shop' && savedShopToken) {
+              setSection('shop');
+            }
+          }
+        );
+      }
+    }
 
     fetch('/api/public/config')
       .then((res) => res.json())
@@ -126,7 +161,8 @@ export default function App() {
   };
 
   const handleOpenFullShopCabinetFromQuickReply = (shopToken: string) => {
-    localStorage.setItem('avtotap_shop_token', shopToken);
+    void saveAuthTokenToPhone('shop', shopToken);
+    void savePreferredSection('shop');
     setQuickReplyParams(null);
     navigateSection('shop');
   };

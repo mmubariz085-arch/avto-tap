@@ -190,3 +190,107 @@ export async function saveAdminBackupToPhone(
 export async function loadAdminBackupFromPhone(): Promise<AdminPhoneBackup | null> {
   return idbGet<AdminPhoneBackup>('admin_backup');
 }
+
+export async function saveAuthTokenToPhone(role: 'admin' | 'shop', token: string): Promise<void> {
+  const lsKey = role === 'admin' ? 'avtotap_admin_token' : 'avtotap_shop_token';
+  try {
+    localStorage.setItem(lsKey, token);
+  } catch {
+    // ignore
+  }
+  await idbSet(`auth_token_${role}`, token);
+}
+
+export async function loadAuthTokenFromPhone(role: 'admin' | 'shop'): Promise<string | null> {
+  const lsKey = role === 'admin' ? 'avtotap_admin_token' : 'avtotap_shop_token';
+  try {
+    const lsToken = localStorage.getItem(lsKey);
+    if (lsToken) return lsToken;
+  } catch {
+    // ignore
+  }
+  const idbToken = await idbGet<string>(`auth_token_${role}`);
+  if (idbToken) {
+    try {
+      localStorage.setItem(lsKey, idbToken);
+    } catch {
+      // ignore
+    }
+  }
+  return idbToken || null;
+}
+
+export async function clearAuthTokenFromPhone(role: 'admin' | 'shop'): Promise<void> {
+  const lsKey = role === 'admin' ? 'avtotap_admin_token' : 'avtotap_shop_token';
+  try {
+    localStorage.removeItem(lsKey);
+  } catch {
+    // ignore
+  }
+  await idbDelete(`auth_token_${role}`);
+}
+
+export interface ShopProfilePhoneCache {
+  shop: Record<string, unknown>;
+  adminWhatsapp: string;
+  savedAt: string;
+}
+
+export async function saveShopProfileToPhone(
+  shop: Record<string, unknown>,
+  adminWhatsapp: string
+): Promise<void> {
+  await idbSet('shop_profile_cache', {
+    shop,
+    adminWhatsapp,
+    savedAt: new Date().toISOString(),
+  });
+}
+
+export async function loadShopProfileFromPhone(): Promise<ShopProfilePhoneCache | null> {
+  return idbGet<ShopProfilePhoneCache>('shop_profile_cache');
+}
+
+export async function clearShopProfileFromPhone(): Promise<void> {
+  await idbDelete('shop_profile_cache');
+  await idbDelete('shop_feed_cache');
+}
+
+export async function savePreferredSection(section: 'shop'): Promise<void> {
+  try {
+    localStorage.setItem('avtotap_preferred_section', section);
+  } catch {
+    // ignore
+  }
+  await idbSet('preferred_section', section);
+}
+
+export async function loadPreferredSection(): Promise<'shop' | null> {
+  try {
+    const ls = localStorage.getItem('avtotap_preferred_section');
+    if (ls === 'shop') return 'shop';
+  } catch {
+    // ignore
+  }
+  const idbVal = await idbGet<string>('preferred_section');
+  if (idbVal === 'shop') {
+    try {
+      localStorage.setItem('avtotap_preferred_section', 'shop');
+    } catch {
+      // ignore
+    }
+    return 'shop';
+  }
+  return null;
+}
+
+export async function clearPreferredSection(): Promise<void> {
+  try {
+    localStorage.removeItem('avtotap_preferred_section');
+  } catch {
+    // ignore
+  }
+  await idbDelete('preferred_section');
+}
+
+

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
 import { triggerAlertFeedback, unlockAudio } from '../utils/notify';
+import { postJsonWithRetry } from '../utils/api';
 import type {
   PartAvailability,
   PartCondition,
@@ -50,10 +51,13 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
   useEffect(() => {
     let active = true;
     fetch(`/api/shop/quick-reply/${encodeURIComponent(requestId)}`, {
-      headers: { Authorization: `Bearer ${shopToken}` },
+      headers: { Authorization: `Bearer ${shopToken}`, Accept: 'application/json' },
+      credentials: 'same-origin',
+      cache: 'no-store',
     })
       .then(async (res) => {
-        const data = await res.json();
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : {};
         if (!active) return;
         if (!res.ok) {
           setErrorMsg(data.error || 'Sorğu yüklənmədi.');
@@ -85,6 +89,7 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSending) return;
     unlockAudio();
     setSubmitError(null);
     const parsed = Number(priceAzn);
@@ -96,32 +101,25 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
 
     setIsSending(true);
     try {
-      const res = await fetch('/api/shop/quotes', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${shopToken}`,
-        },
-        body: JSON.stringify({
+      const result = await postJsonWithRetry<{ quote?: ShopQuote; error?: string }>(
+        '/api/shop/quotes',
+        {
           requestId,
           priceAzn: parsed,
           condition,
           availability,
           comment: comment.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
+        },
+        { token: shopToken, retries: 2, timeoutMs: 15000 }
+      );
+      if (!result.ok || !result.data.quote) {
         triggerAlertFeedback('error');
-        setSubmitError(data.error || 'Cavab göndərilmədi.');
+        setSubmitError(result.data.error || 'Cavab göndərilmədi.');
         return;
       }
       triggerAlertFeedback('success');
-      setSentQuote(data.quote);
+      setSentQuote(result.data.quote);
       setJustSubmitted(true);
-    } catch {
-      triggerAlertFeedback('error');
-      setSubmitError('Serverlə əlaqə xətası.');
     } finally {
       setIsSending(false);
     }

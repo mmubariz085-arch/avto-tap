@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bell,
@@ -8,12 +8,26 @@ import {
   LogOut,
   MessageCircle,
   Send,
+  Smartphone,
   Store,
+  Volume2,
   X,
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
-import { triggerAlertFeedback, unlockAudio } from '../utils/notify';
-import { loadShopFeedFromPhone, saveShopFeedToPhone } from '../utils/phoneStorage';
+import { subscribePushNotifications, triggerAlertFeedback, unlockAudio } from '../utils/notify';
+import { postJsonWithRetry } from '../utils/api';
+import {
+  clearAuthTokenFromPhone,
+  clearPreferredSection,
+  clearShopProfileFromPhone,
+  loadAuthTokenFromPhone,
+  loadShopFeedFromPhone,
+  loadShopProfileFromPhone,
+  saveAuthTokenToPhone,
+  savePreferredSection,
+  saveShopFeedToPhone,
+  saveShopProfileToPhone,
+} from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import type {
   PartAvailability,
@@ -59,37 +73,119 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [isSendingQuote, setIsSendingQuote] = useState(false);
 
-  // Media & sound
+  // Media, sound, wake-lock & live status
   const [zoomPhoto, setZoomPhoto] = useState<string | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [newAlertBanner, setNewAlertBanner] = useState<string | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [wakeLockActive, setWakeLockActive] = useState(false);
 
-  // Hydrate cached feed from phone memory on mount
+  const seenRequestIdsRef = useRef<Set<string>>(new Set());
+  const feedInitializedRef = useRef(false);
+  const soundEnabledRef = useRef(soundEnabled);
+  soundEnabledRef.current = soundEnabled;
+
+  // Hydrate token, cached shop profile, & cached feed from phone memory on mount
   useEffect(() => {
-    if (!token) return;
-    void loadShopFeedFromPhone().then((cached) => {
-      if (!cached || !Array.isArray(cached.requests)) return;
-      setFeed((prev) => (prev.length > 0 ? prev : (cached.requests as unknown as ShopFeedItem[])));
-    });
+    if (!token) {
+      void loadAuthTokenFromPhone('shop').then((savedToken) => {
+        if (savedToken) {
+          setToken(savedToken);
+          setLoading(true);
+        }
+      });
+      return;
+    }
+
+    void Promise.all([loadShopProfileFromPhone(), loadShopFeedFromPhone()]).then(
+      ([profileCache, feedCache]) => {
+        if (profileCache?.shop) {
+          setShop((prev) => prev || (profileCache.shop as unknown as PublicShopInfo));
+          if (profileCache.adminWhatsapp) {
+            setAdminWhatsapp((prev) => prev || profileCache.adminWhatsapp);
+          }
+          setLoading(false);
+        }
+        if (feedCache && Array.isArray(feedCache.requests)) {
+          const cachedItems = feedCache.requests as unknown as ShopFeedItem[];
+          cachedItems.forEach((r) => seenRequestIdsRef.current.add(r.id));
+          feedInitializedRef.current = true;
+          setFeed((prev) => (prev.length > 0 ? prev : cachedItems));
+        }
+      }
+    );
   }, [token]);
 
   const loadShopDashboard = useCallback(async (activeToken: string) => {
     try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 15000);
       const res = await fetch('/api/shop/me', {
-        headers: { Authorization: `Bearer ${activeToken}` },
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+          Accept: 'application/json',
+        },
+        credentials: 'same-origin',
         cache: 'no-store',
+        signal: controller.signal,
       });
-      if (res.status === 401) {
-        localStorage.removeItem('avtotap_shop_token');
+      window.clearTimeout(timeoutId);
+
+      const rawText = await res.text();
+      let data: {
+        error?: string;
+        shop?: PublicShopInfo;
+        adminWhatsapp?: string;
+        requests?: ShopFeedItem[];
+      } | null = null;
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        data = null;
+      }
+
+      if (res.status === 401 && data && typeof data.error === 'string') {
+        void clearAuthTokenFromPhone('shop');
+        void clearPreferredSection();
+        void clearShopProfileFromPhone();
         setToken(null);
         setShop(null);
         setFeed([]);
         return;
       }
-      const data = await res.json();
+      if (!res.ok || !data || !data.shop) {
+        return;
+      }
+
       setShop(data.shop);
       setAdminWhatsapp(data.adminWhatsapp || '');
+      void savePreferredSection('shop');
+      void saveShopProfileToPhone(
+        data.shop as unknown as Record<string, unknown>,
+        data.adminWhatsapp || ''
+      );
+
       const nextFeed: ShopFeedItem[] = Array.isArray(data.requests) ? data.requests : [];
+      if (feedInitializedRef.current) {
+        const newlyArrived = nextFeed.filter((r) => !seenRequestIdsRef.current.has(r.id));
+        if (newlyArrived.length > 0 && data.shop.isEffectivelyActive) {
+          const latest = newlyArrived[0];
+          triggerAlertFeedback('incoming', {
+            sound: soundEnabledRef.current,
+            vibrate: soundEnabledRef.current,
+            notification: {
+              title: `Yeni sorğu: ${latest.carBrandModel} (${latest.year})`,
+              body: latest.partName,
+              url: `/?tab=shop&reply=${encodeURIComponent(latest.id)}`,
+              tag: `req-${latest.id}`,
+            },
+          });
+          setNewAlertBanner(`Yeni sorğu: ${latest.carBrandModel} (${latest.year}) — ${latest.partName}`);
+        }
+      }
+      nextFeed.forEach((r) => seenRequestIdsRef.current.add(r.id));
+      feedInitializedRef.current = true;
+
       setFeed(nextFeed);
       if (data.shop?.id) {
         void saveShopFeedToPhone({
@@ -109,6 +205,13 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   useEffect(() => {
     if (token) {
       void loadShopDashboard(token);
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        void subscribePushNotifications({
+          role: 'shop',
+          authToken: token,
+          requestPermissionIfDefault: false,
+        });
+      }
     }
   }, [token, loadShopDashboard]);
 
@@ -122,7 +225,43 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     }
   }, [replyRequestId, feed, shop, onClearReplyId]);
 
-  // WebSocket live feed for shop
+  // Keep Screen Awake toggle (for shops keeping panel open on counter phone)
+  useEffect(() => {
+    if (!wakeLockActive || typeof navigator === 'undefined') return;
+    const wakeApi = (navigator as unknown as {
+      wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> };
+    }).wakeLock;
+    if (!wakeApi) return;
+
+    let sentinel: { release: () => Promise<void> } | null = null;
+    let cancelled = false;
+
+    const acquire = async () => {
+      try {
+        if (document.visibilityState !== 'visible' || cancelled) return;
+        sentinel = await wakeApi.request('screen');
+      } catch {
+        // ignore unsupported/battery-saver restrictions
+      }
+    };
+
+    void acquire();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void acquire();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (sentinel) {
+        void sentinel.release().catch(() => {});
+      }
+    };
+  }, [wakeLockActive]);
+
+  // Dual-channel Live Sync: WebSocket + 15s Backup Poll + Foreground/SW Push Sync
   useEffect(() => {
     if (!token) return;
     let socket: WebSocket | null = null;
@@ -135,6 +274,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       socket = new WebSocket(url);
 
       socket.onopen = () => {
+        setWsConnected(true);
         void loadShopDashboard(token);
       };
 
@@ -143,6 +283,8 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
           const event = JSON.parse(evt.data) as WsEvent;
           if (event.type === 'request:created') {
             const incoming = event.payload;
+            const alreadySeen = seenRequestIdsRef.current.has(incoming.id);
+            seenRequestIdsRef.current.add(incoming.id);
             setFeed((prev) => {
               if (prev.some((r) => r.id === incoming.id)) return prev;
               const nextItem: ShopFeedItem = {
@@ -152,17 +294,19 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
               };
               return [nextItem, ...prev];
             });
-            triggerAlertFeedback('incoming', {
-              sound: soundEnabled,
-              vibrate: soundEnabled,
-              notification: {
-                title: `Yeni sorğu: ${incoming.carBrandModel} (${incoming.year})`,
-                body: incoming.partName,
-                url: `/?tab=shop&reply=${encodeURIComponent(incoming.id)}`,
-                tag: `req-${incoming.id}`,
-              },
-            });
-            setNewAlertBanner(`Yeni sorğu: ${incoming.carBrandModel} (${incoming.year}) — ${incoming.partName}`);
+            if (!alreadySeen) {
+              triggerAlertFeedback('incoming', {
+                sound: soundEnabledRef.current,
+                vibrate: soundEnabledRef.current,
+                notification: {
+                  title: `Yeni sorğu: ${incoming.carBrandModel} (${incoming.year})`,
+                  body: incoming.partName,
+                  url: `/?tab=shop&reply=${encodeURIComponent(incoming.id)}`,
+                  tag: `req-${incoming.id}`,
+                },
+              });
+              setNewAlertBanner(`Yeni sorğu: ${incoming.carBrandModel} (${incoming.year}) — ${incoming.partName}`);
+            }
           } else if (event.type === 'request:deleted') {
             setFeed((prev) => prev.filter((r) => r.id !== event.payload.requestId));
           } else if (event.type === 'shop:updated') {
@@ -174,6 +318,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       };
 
       socket.onclose = () => {
+        setWsConnected(false);
         if (!closedByUser) {
           reconnectTimer = window.setTimeout(connect, 3000);
         }
@@ -182,43 +327,103 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
 
     connect();
 
+    const syncNow = () => {
+      void loadShopDashboard(token);
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        void subscribePushNotifications({
+          role: 'shop',
+          authToken: token,
+          requestPermissionIfDefault: false,
+        });
+      }
+      if (!socket || socket.readyState === WebSocket.CLOSED) {
+        connect();
+      }
+    };
+
+    const pollInterval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadShopDashboard(token);
+      }
+    }, 15_000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        syncNow();
+      }
+    };
+
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'PUSH_RECEIVED') {
+        void loadShopDashboard(token);
+        triggerAlertFeedback('incoming', {
+          sound: soundEnabledRef.current,
+          vibrate: soundEnabledRef.current,
+        });
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', syncNow);
+    window.addEventListener('online', syncNow);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    }
+
     return () => {
       closedByUser = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      window.clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', syncNow);
+      window.removeEventListener('online', syncNow);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
       socket?.close();
     };
-  }, [token, soundEnabled, loadShopDashboard]);
+  }, [token, loadShopDashboard]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoggingIn) return;
     setLoginError(null);
     setIsLoggingIn(true);
     try {
-      const res = await fetch('/api/shop/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ whatsapp: loginPhone.trim(), pin: loginPin.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setLoginError(data.error || 'Giriş alınmadı.');
+      const result = await postJsonWithRetry<{
+        token?: string;
+        shop?: PublicShopInfo;
+        adminWhatsapp?: string;
+        error?: string;
+      }>(
+        '/api/shop/login',
+        { whatsapp: loginPhone.trim(), pin: loginPin.trim() },
+        { retries: 2, timeoutMs: 15000 }
+      );
+      if (!result.ok || !result.data.token || !result.data.shop) {
+        setLoginError(result.data.error || 'Giriş alınmadı.');
         return;
       }
-      localStorage.setItem('avtotap_shop_token', data.token);
+      await saveAuthTokenToPhone('shop', result.data.token);
+      await savePreferredSection('shop');
+      await saveShopProfileToPhone(
+        result.data.shop as unknown as Record<string, unknown>,
+        result.data.adminWhatsapp || ''
+      );
       localStorage.setItem('avtotap_shop_phone', loginPhone.trim());
-      setToken(data.token);
-      setShop(data.shop);
-      setAdminWhatsapp(data.adminWhatsapp || '');
+      setToken(result.data.token);
+      setShop(result.data.shop);
+      setAdminWhatsapp(result.data.adminWhatsapp || '');
       setLoading(true);
-    } catch {
-      setLoginError('Serverlə əlaqə xətası.');
     } finally {
       setIsLoggingIn(false);
     }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('avtotap_shop_token');
+    void clearAuthTokenFromPhone('shop');
+    void clearPreferredSection();
+    void clearShopProfileFromPhone();
     setToken(null);
     setShop(null);
     setFeed([]);
@@ -249,28 +454,24 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
 
     setIsSendingQuote(true);
     try {
-      const res = await fetch('/api/shop/quotes', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
+      const result = await postJsonWithRetry<{ quote?: ShopQuote; error?: string }>(
+        '/api/shop/quotes',
+        {
           requestId: activeRequest.id,
           priceAzn: parsed,
           condition,
           availability,
           comment: comment.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
+        },
+        { token, retries: 2, timeoutMs: 15000 }
+      );
+      if (!result.ok || !result.data.quote) {
         triggerAlertFeedback('error', { sound: soundEnabled, vibrate: soundEnabled });
-        setQuoteError(data.error || 'Qiymət göndərilmədi.');
+        setQuoteError(result.data.error || 'Qiymət göndərilmədi.');
         return;
       }
 
-      const savedQuote = data.quote as ShopQuote;
+      const savedQuote = result.data.quote;
       setFeed((prev) => {
         const next = prev.map((item) =>
           item.id === activeRequest.id
@@ -293,9 +494,6 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       });
       triggerAlertFeedback('success', { sound: soundEnabled, vibrate: soundEnabled });
       setActiveRequest(null);
-    } catch {
-      triggerAlertFeedback('error', { sound: soundEnabled, vibrate: soundEnabled });
-      setQuoteError('Şəbəkə xətası baş verdi.');
     } finally {
       setIsSendingQuote(false);
     }
@@ -432,7 +630,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-9">
       {/* Shop Status Bar */}
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-[#0B1120] p-5 text-white shadow-[0_14px_32px_-16px_rgba(11,17,32,0.5)]">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-[#0B1120] p-5 text-white shadow-[0_14px_32px_-16px_rgba(11,17,32,0.5)]">
         <div className="min-w-0">
           <h1 className="truncate font-display text-xl font-extrabold text-white">{shop.name}</h1>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-slate-300">
@@ -445,14 +643,56 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             <span className="font-semibold text-white">{shop.tariff}</span>
             <span aria-hidden="true">·</span>
             <span className="text-emerald-400 font-semibold">Aktiv ({shop.expiresAt}-dək)</span>
+            <span aria-hidden="true">·</span>
+            <span className={wsConnected ? 'text-emerald-400 font-semibold' : 'text-amber-300'}>
+              {wsConnected ? 'Canlı əlaqə' : 'Yenidən qoşulur...'}
+            </span>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <PushNotificationsButton role="shop" authToken={token} compact />
           <button
             type="button"
-            onClick={() => setSoundEnabled((v) => !v)}
+            onClick={() => {
+              unlockAudio();
+              triggerAlertFeedback('incoming', {
+                sound: true,
+                vibrate: true,
+                notification: {
+                  title: 'Test bildirişi — Şərur AvtoZapcast',
+                  body: 'Səs, vibrasiya və müştəri sorğu bildirişləri işləyir!',
+                  url: '/?tab=shop',
+                  tag: 'shop-test-alert',
+                },
+              });
+            }}
+            className="flex min-h-[42px] items-center gap-1.5 rounded-xl bg-white/10 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/20"
+          >
+            <Volume2 className="h-4 w-4 text-emerald-400" />
+            <span className="hidden sm:inline">Səsi yoxla</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setWakeLockActive((v) => !v)}
+            className={`flex min-h-[42px] items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
+              wakeLockActive
+                ? 'bg-orange-600 text-white'
+                : 'bg-white/10 text-white hover:bg-white/20'
+            }`}
+          >
+            <Smartphone className="h-4 w-4" />
+            <span className="hidden sm:inline">
+              {wakeLockActive ? 'Ekran açıqdır' : 'Ekran sönməsin'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              unlockAudio();
+              setSoundEnabled((v) => !v);
+            }}
             aria-label={soundEnabled ? 'Səsi söndür' : 'Səsi aç'}
             className="flex min-h-[42px] items-center gap-1.5 rounded-xl bg-white/10 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/20"
           >
@@ -470,6 +710,31 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
           </button>
         </div>
       </div>
+
+      {/* Prominent Push Notification Activation Bar (only shown until enabled) */}
+      {typeof window !== 'undefined' &&
+        'Notification' in window &&
+        Notification.permission !== 'granted' && (
+          <div className="mb-5 rounded-3xl border border-orange-200 bg-orange-50/90 p-4 sm:p-5 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="font-display text-sm font-extrabold text-slate-950">
+                  Müştəri sifarişlərini qaçırmamaq üçün puş bildirişləri açın
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-700 leading-relaxed">
+                  {Notification.permission === 'denied'
+                    ? 'Bildirişlər brauzer ayarlarından bloklanıb. Telefon ayarlarından bildiriş icazəsini «İcazə ver» edin.'
+                    : 'Telefon bağlı olanda belə yeni sorğular səs və vibrasiya ilə dərhal gələcək.'}
+                </p>
+              </div>
+              {Notification.permission !== 'denied' && (
+                <div className="shrink-0 sm:w-56">
+                  <PushNotificationsButton role="shop" authToken={token} />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
       {newAlertBanner && (
         <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3.5 text-sm font-bold text-orange-950 shadow-sm">

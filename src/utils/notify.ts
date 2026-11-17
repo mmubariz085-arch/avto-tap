@@ -243,16 +243,34 @@ export async function subscribePushNotifications(params: {
 
   try {
     const reg = await navigator.serviceWorker.ready;
-    const vapidRes = await fetch('/api/push/vapid-key');
+    const vapidRes = await fetch('/api/push/vapid-key', { cache: 'no-store' });
     if (!vapidRes.ok) return permission;
     const { publicKey } = (await vapidRes.json()) as { publicKey?: string };
     if (!publicKey) return permission;
 
+    const appServerKey = urlBase64ToUint8Array(publicKey);
     let sub = await reg.pushManager.getSubscription();
+
+    // If existing subscription belongs to a different VAPID key, unsubscribe and re-subscribe
+    if (sub && sub.options?.applicationServerKey) {
+      try {
+        const existingBytes = new Uint8Array(sub.options.applicationServerKey);
+        const mismatch =
+          existingBytes.length !== appServerKey.length ||
+          existingBytes.some((b, i) => b !== appServerKey[i]);
+        if (mismatch) {
+          await sub.unsubscribe();
+          sub = null;
+        }
+      } catch {
+        // ignore option comparison errors
+      }
+    }
+
     if (!sub) {
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(publicKey),
+        applicationServerKey: appServerKey,
       });
     }
 
@@ -264,6 +282,8 @@ export async function subscribePushNotifications(params: {
     await fetch('/api/push/subscribe', {
       method: 'POST',
       headers,
+      credentials: 'same-origin',
+      cache: 'no-store',
       body: JSON.stringify({
         subscription: sub.toJSON(),
         role: params.role,
@@ -276,3 +296,4 @@ export async function subscribePushNotifications(params: {
 
   return permission;
 }
+

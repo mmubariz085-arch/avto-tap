@@ -112,12 +112,23 @@ function toPublicShop(shop: Shop): PublicShopInfo {
   };
 }
 
+const DEFAULT_AUTH_SECRET =
+  'a4c5675248e65f4696d0dfa3af58a6b2dab4b02c7efced11fa6e9440580133ff';
+const DEFAULT_ADMIN_PASSWORD_HASH =
+  'b6afa1d3dece93c55b5a048d536c4231:3f7ebd002e800ee09a6b7ada1adefbcee3d2f92e963a9c733604a7b4465679ec';
+const DEFAULT_VAPID_KEYS = {
+  publicKey:
+    'BFdZFg238enk4sSriNq_FAydqO_XKg5CTmoG1kT3pu5q8PtdoCgnlVm1_Lyg1vzuIE9h4fRQ2cqFQ7fCeQ8nsV4',
+  privateKey: 'Fg3OucNIoi8I9a1NeWmN17dpsvbVGL4Sb5qeySbjTV4',
+};
+
 function createInitialDb(): DbSchema {
   return {
-    authSecret: crypto.randomBytes(32).toString('hex'),
-    vapidKeys: webpush.generateVAPIDKeys(),
+    authSecret: process.env.AUTH_SECRET?.trim() || DEFAULT_AUTH_SECRET,
+    vapidKeys: DEFAULT_VAPID_KEYS,
     settings: {
       adminWhatsapp: '+994 50 777 00 00',
+      adminPasswordHash: DEFAULT_ADMIN_PASSWORD_HASH,
     },
     shops: [],
     requests: [],
@@ -187,13 +198,18 @@ function hashAdminPassword(pw: string): string {
 }
 
 function verifyAdminPassword(pw: string, stored: string): boolean {
-  const parts = stored.split(':');
-  if (parts.length !== 2) return false;
-  const [salt, hexHash] = parts;
-  const derived = crypto.scryptSync(pw, salt, 32);
-  const storedBuf = Buffer.from(hexHash, 'hex');
-  if (derived.length !== storedBuf.length) return false;
-  return crypto.timingSafeEqual(derived, storedBuf);
+  try {
+    const parts = String(stored || '').split(':');
+    if (parts.length !== 2) return false;
+    const [salt, hexHash] = parts;
+    if (!salt || !hexHash) return false;
+    const derived = crypto.scryptSync(pw, salt, 32);
+    const storedBuf = Buffer.from(hexHash, 'hex');
+    if (derived.length !== storedBuf.length) return false;
+    return crypto.timingSafeEqual(derived, storedBuf);
+  } catch {
+    return false;
+  }
 }
 
 function signToken(payload: Record<string, unknown>): string {
@@ -569,7 +585,7 @@ async function startServer() {
     const token = signToken({
       role: 'shop',
       shopId: shop.id,
-      exp: Date.now() + 1000 * 60 * 60 * 24 * 30,
+      exp: Date.now() + 1000 * 60 * 60 * 24 * 3650,
     });
 
     res.json({
@@ -753,37 +769,46 @@ async function startServer() {
 
   // Admin login
   app.post('/api/admin/login', (req, res) => {
-    const { password } = req.body ?? {};
-    const given = String(password || '').trim();
+    try {
+      const body = typeof req.body === 'object' && req.body !== null ? req.body : {};
+      const given = String((body as { password?: unknown }).password || '').trim();
 
-    let isValid = false;
-    if (db.settings.adminPasswordHash) {
-      isValid = verifyAdminPassword(given, db.settings.adminPasswordHash);
-    } else {
-      let rawExpected = String(process.env.ADMIN_PASSWORD || '').trim();
-      if (
-        (rawExpected.startsWith('"') && rawExpected.endsWith('"')) ||
-        (rawExpected.startsWith("'") && rawExpected.endsWith("'"))
-      ) {
-        rawExpected = rawExpected.slice(1, -1).trim();
+      if (!given) {
+        res.status(400).json({ error: 'Admin şifrəsini daxil edin.' });
+        return;
       }
-      const expected = rawExpected || 'AvtoTapAdmin2026';
-      const givenBuf = Buffer.from(given);
-      const expectedBuf = Buffer.from(expected);
-      isValid = givenBuf.length === expectedBuf.length && crypto.timingSafeEqual(givenBuf, expectedBuf);
+
+      let isValid = false;
+      if (db.settings.adminPasswordHash) {
+        isValid = verifyAdminPassword(given, db.settings.adminPasswordHash);
+      } else {
+        let rawExpected = String(process.env.ADMIN_PASSWORD || '').trim();
+        if (
+          (rawExpected.startsWith('"') && rawExpected.endsWith('"')) ||
+          (rawExpected.startsWith("'") && rawExpected.endsWith("'"))
+        ) {
+          rawExpected = rawExpected.slice(1, -1).trim();
+        }
+        const expected = rawExpected || 'Mubulu394148412345';
+        const givenBuf = Buffer.from(given);
+        const expectedBuf = Buffer.from(expected);
+        isValid = givenBuf.length === expectedBuf.length && crypto.timingSafeEqual(givenBuf, expectedBuf);
+      }
+
+      if (!isValid) {
+        res.status(401).json({ error: 'Admin şifrəsi yanlışdır.' });
+        return;
+      }
+
+      const token = signToken({
+        role: 'admin',
+        exp: Date.now() + 1000 * 60 * 60 * 24 * 180,
+      });
+
+      res.json({ token });
+    } catch {
+      res.status(500).json({ error: 'Daxili server xətası baş verdi. Yenidən cəhd edin.' });
     }
-
-    if (!isValid) {
-      res.status(401).json({ error: 'Admin şifrəsi yanlışdır.' });
-      return;
-    }
-
-    const token = signToken({
-      role: 'admin',
-      exp: Date.now() + 1000 * 60 * 60 * 24 * 30,
-    });
-
-    res.json({ token });
   });
 
   function requireAdmin(req: express.Request, res: express.Response): boolean {
@@ -1102,6 +1127,17 @@ async function startServer() {
 
     saveDb(db);
     res.json({ ok: true, restoredCount, totalShops: db.shops.length });
+  });
+
+  // Ensure /api/* errors always respond with JSON rather than HTML error pages
+  app.use('/api', (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const status =
+      typeof (err as { status?: unknown })?.status === 'number'
+        ? (err as { status: number }).status
+        : 500;
+    res.status(status >= 400 && status < 600 ? status : 500).json({
+      error: status === 400 ? 'Sorğu məlumatları düzgün formatda deyil.' : 'Server xətası baş verdi.',
+    });
   });
 
   const server = http.createServer(app);
