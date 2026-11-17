@@ -26,7 +26,23 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT || 3000);
+function resolveListenPort(): number {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--port' && args[i + 1]) {
+      const parsed = Number(args[i + 1]);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    } else if (arg.startsWith('--port=')) {
+      const parsed = Number(arg.slice(7));
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+  const envPort = Number(process.env.PORT);
+  return Number.isFinite(envPort) && envPort > 0 ? envPort : 3000;
+}
+
+const PORT = resolveListenPort();
 const IS_PROD = process.env.NODE_ENV === 'production';
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
@@ -1477,8 +1493,19 @@ async function startServer() {
     });
   });
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Şərur AvtoZapcast server running at http://0.0.0.0:${PORT}`);
+  let activePort = PORT;
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE' && activePort === 8080) {
+      activePort = 3000;
+      server.listen(activePort, '0.0.0.0');
+      return;
+    }
+    console.error('Server listen error:', err);
+    process.exit(1);
+  });
+
+  server.listen(activePort, '0.0.0.0', () => {
+    console.log(`Şərur AvtoZapcast server running at http://0.0.0.0:${activePort}`);
   });
 }
 

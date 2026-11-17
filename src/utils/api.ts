@@ -102,8 +102,12 @@ export async function postJsonWithRetry<T = Record<string, unknown>>(
         parsed = null;
       }
 
-      // If proxy/gateway returned HTML or 5xx while container was waking up, retry after waking
-      const isTransientGateway = res.status >= 500 || parsed === null;
+      // If proxy/gateway returned HTML, 5xx, or upstream 404 while container was waking up, retry after waking
+      const rawErrorMsg = parsed ? extractApiError(parsed, '') : '';
+      const isUpstreamGateway404 =
+        res.status === 404 &&
+        (parsed === null || /page could not be found/i.test(rawErrorMsg));
+      const isTransientGateway = res.status >= 500 || parsed === null || isUpstreamGateway404;
       if (isTransientGateway && attempt < maxAttempts - 1) {
         await wakeServerIfNeeded();
         await sleep(500 * (attempt + 1));
@@ -116,6 +120,17 @@ export async function postJsonWithRetry<T = Record<string, unknown>>(
           status: res.status || 502,
           data: { error: 'Server oyanır, zəhmət olmasa yenidən cəhd edin.' } as T,
           networkError: true,
+        };
+      }
+
+      if (isUpstreamGateway404) {
+        return {
+          ok: false,
+          status: 404,
+          data: {
+            error:
+              'Server API bu linkdə aktiv deyil (404). Tətbiqi əsas işlək linkdən açın və ya səhifəni yeniləyin.',
+          } as T,
         };
       }
 
