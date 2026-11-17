@@ -39,9 +39,11 @@ import {
 } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import { QrPosterModal } from './QrPosterModal';
+import { UnauthorizedDomainNotice } from './UnauthorizedDomainNotice';
 import {
   ADMIN_EMAIL,
   deleteShopFromFirestore,
+  isUnauthorizedDomainError,
   loadAllShopsFromFirestoreForAdmin,
   mapFirebaseAuthErrorAz,
   signInWithGmail,
@@ -108,6 +110,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordFallback, setShowPasswordFallback] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [unauthorizedDomain, setUnauthorizedDomain] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isGoogleLoggingIn, setIsGoogleLoggingIn] = useState(false);
 
@@ -371,6 +374,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   const handleGoogleLogin = async () => {
     if (isGoogleLoggingIn || isLoggingIn) return;
     setLoginError(null);
+    setUnauthorizedDomain(false);
     setIsGoogleLoggingIn(true);
     try {
       const user = await signInWithGmail();
@@ -405,6 +409,10 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       setPassword('');
       setLoading(true);
     } catch (err) {
+      if (isUnauthorizedDomainError(err)) {
+        setUnauthorizedDomain(true);
+        setShowPasswordFallback(true);
+      }
       setLoginError(mapFirebaseAuthErrorAz(err));
     } finally {
       setIsGoogleLoggingIn(false);
@@ -790,6 +798,8 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                 {loginError}
               </div>
             )}
+
+            {unauthorizedDomain && <UnauthorizedDomainNotice />}
 
             <div className="pt-2 text-center">
               <button

@@ -29,8 +29,10 @@ import {
   saveShopProfileToPhone,
 } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
+import { UnauthorizedDomainNotice } from './UnauthorizedDomainNotice';
 import {
   auth,
+  isUnauthorizedDomainError,
   loadMyShopFromFirestore,
   mapFirebaseAuthErrorAz,
   signInWithGmail,
@@ -93,6 +95,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   });
   const [loginPin, setLoginPin] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [unauthorizedDomain, setUnauthorizedDomain] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [showPinFallback, setShowPinFallback] = useState(false);
@@ -472,6 +475,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   const handleShopGoogleLogin = async () => {
     if (isGoogleLoading || isLoggingIn || isRegistering) return;
     setLoginError(null);
+    setUnauthorizedDomain(false);
     setIsGoogleLoading(true);
     try {
       const user = await signInWithGmail();
@@ -560,6 +564,9 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
         displayName: user.displayName || result.data.displayName || '',
       });
     } catch (err) {
+      if (isUnauthorizedDomainError(err)) {
+        setUnauthorizedDomain(true);
+      }
       setLoginError(mapFirebaseAuthErrorAz(err));
     } finally {
       setIsGoogleLoading(false);
@@ -837,6 +844,8 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                   {loginError}
                 </div>
               )}
+
+              {unauthorizedDomain && <UnauthorizedDomainNotice />}
 
               <p className="text-xs leading-relaxed text-slate-500">
                 Bir toxunuşla Gmail hesabınızla mağaza qeydiyyatından keçin və müştəri sifarişlərini dərhal qəbul edin.

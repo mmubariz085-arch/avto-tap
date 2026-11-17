@@ -108,6 +108,25 @@ export async function signOutFirebase(): Promise<void> {
   }
 }
 
+export function isUnauthorizedDomainError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code || '';
+  return code === 'auth/unauthorized-domain';
+}
+
+export function getUnauthorizedDomainSetupInfo(): {
+  hostname: string;
+  consoleUrl: string;
+} {
+  const hostname =
+    typeof window !== 'undefined' && window.location?.hostname
+      ? window.location.hostname
+      : '';
+  return {
+    hostname,
+    consoleUrl: `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`,
+  };
+}
+
 export function mapFirebaseAuthErrorAz(err: unknown): string {
   const code = (err as { code?: string })?.code || '';
   if (code === 'auth/popup-closed-by-user') {
@@ -123,7 +142,10 @@ export function mapFirebaseAuthErrorAz(err: unknown): string {
     return 'İnternet bağlantısı yoxdur və ya zəifdir.';
   }
   if (code === 'auth/unauthorized-domain') {
-    return 'Bu domen Firebase Auth siyahısında icazəli deyil.';
+    const { hostname } = getUnauthorizedDomainSetupInfo();
+    return hostname
+      ? `Bu domen (${hostname}) Firebase Auth icazə siyahısında yoxdur.`
+      : 'Bu domen Firebase Auth siyahısında icazəli deyil.';
   }
   return 'Gmail ilə giriş zamanı xəta baş verdi. Yenidən cəhd edin.';
 }
