@@ -20,7 +20,9 @@ export function buildTelUrl(phone: string): string {
 }
 
 export function formatTimeAgoAz(iso: string): string {
-  const diffSec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  const ts = iso ? new Date(iso).getTime() : NaN;
+  if (!Number.isFinite(ts)) return 'indicə';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (diffSec < 45) return 'indicə';
   const mins = Math.floor(diffSec / 60);
   if (mins < 60) return `${mins} dəq əvvəl`;

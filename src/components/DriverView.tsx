@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera, Check, ChevronRight, ImagePlus, QrCode, Send, Trash2 } from 'lucide-react';
 import { compressImageFile } from '../utils/phone';
-import { subscribePushNotifications, triggerAlertFeedback, unlockAudio } from '../utils/notify';
+import {
+  getSafeNotificationPermission,
+  subscribePushNotifications,
+  triggerAlertFeedback,
+  unlockAudio,
+} from '../utils/notify';
 import { saveOrderSnapshotToPhone } from '../utils/phoneStorage';
 import type { LegalDocType } from './LegalModal';
 import { PushNotificationsButton } from './PushNotificationsButton';
@@ -65,9 +70,13 @@ export const DriverView: React.FC<DriverViewProps> = ({
   const galleryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const savedPhone = localStorage.getItem('avtotap_driver_phone');
-    if (savedPhone) {
-      setDriverWhatsapp(savedPhone);
+    try {
+      const savedPhone = localStorage.getItem('avtotap_driver_phone');
+      if (savedPhone) {
+        setDriverWhatsapp(savedPhone);
+      }
+    } catch {
+      // ignore storage errors
     }
   }, []);
 
@@ -188,9 +197,13 @@ export const DriverView: React.FC<DriverViewProps> = ({
             return;
           }
 
-          localStorage.setItem('avtotap_driver_phone', cleanPhone);
+          try {
+            localStorage.setItem('avtotap_driver_phone', cleanPhone);
+          } catch {
+            // ignore storage errors
+          }
           void saveOrderSnapshotToPhone(data.request);
-          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          if (getSafeNotificationPermission() === 'granted') {
             void subscribePushNotifications({
               role: 'driver',
               orderId: data.request.id,

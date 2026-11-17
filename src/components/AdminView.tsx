@@ -178,7 +178,16 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       loadAdminBackupFromPhone(),
       getPhoneStorageStats(),
     ]);
-    setPhoneBackup(backup);
+    const validBackup =
+      backup && typeof backup === 'object' && Array.isArray(backup.shops)
+        ? {
+            ...backup,
+            shops: backup.shops.filter(
+              (s) => Boolean(s) && typeof s === 'object' && typeof s.id === 'string' && typeof s.name === 'string'
+            ),
+          }
+        : null;
+    setPhoneBackup(validBackup);
     setStorageStats(stats);
   }, []);
 
@@ -243,8 +252,18 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         return;
       }
 
-      const nextShops: AdminShopRow[] = Array.isArray(data.shops) ? data.shops : [];
-      const nextRequests: RequestWithQuotes[] = Array.isArray(data.requests) ? data.requests : [];
+      const nextShops: AdminShopRow[] = Array.isArray(data.shops)
+        ? data.shops.filter((s): s is AdminShopRow => Boolean(s) && typeof s === 'object' && typeof s.id === 'string')
+        : [];
+      const nextRequests: RequestWithQuotes[] = Array.isArray(data.requests)
+        ? data.requests
+            .filter((r): r is RequestWithQuotes => Boolean(r) && typeof r === 'object' && typeof r.id === 'string')
+            .map((r) => ({
+              ...r,
+              quotes: Array.isArray(r.quotes) ? r.quotes : [],
+              quoteCount: typeof r.quoteCount === 'number' ? r.quoteCount : Array.isArray(r.quotes) ? r.quotes.length : 0,
+            }))
+        : [];
       const nextSettings: AdminSettings = data.settings || settingsRef.current;
 
       setShops(nextShops);
@@ -1441,6 +1460,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
           ) : (
             requests.map((reqItem) => {
               const isExpanded = expandedReqId === reqItem.id;
+              const reqQuotes = Array.isArray(reqItem.quotes) ? reqItem.quotes : [];
               return (
                 <article
                   key={reqItem.id}
@@ -1458,7 +1478,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                       )}
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
-                          <span className="font-mono">#{reqItem.id.slice(-6).toUpperCase()}</span>
+                          <span className="font-mono">#{String(reqItem.id || '').slice(-6).toUpperCase()}</span>
                           <span aria-hidden="true">·</span>
                           <span>{formatTimeAgoAz(reqItem.createdAt)}</span>
                         </div>
@@ -1478,7 +1498,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         onClick={() => setExpandedReqId(isExpanded ? null : reqItem.id)}
                         className="inline-flex min-h-[42px] items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-800 hover:bg-slate-100"
                       >
-                        <span>Cavablar ({reqItem.quoteCount})</span>
+                        <span>Cavablar ({reqItem.quoteCount ?? reqQuotes.length})</span>
                         {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                       </button>
 
@@ -1495,10 +1515,10 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
                   {isExpanded && (
                     <div className="mt-4 border-t border-slate-100 pt-3 space-y-2">
-                      {reqItem.quotes.length === 0 ? (
+                      {reqQuotes.length === 0 ? (
                         <p className="text-xs text-slate-500">Hələlik bu sorğuya cavab göndərilməyib.</p>
                       ) : (
-                        reqItem.quotes.map((q) => (
+                        reqQuotes.map((q) => (
                           <div
                             key={q.id}
                             className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-50 px-4 py-2.5 text-xs"

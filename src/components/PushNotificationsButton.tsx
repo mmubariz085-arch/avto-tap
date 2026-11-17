@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Bell, BellRing } from 'lucide-react';
-import { subscribePushNotifications, triggerAlertFeedback, unlockAudio } from '../utils/notify';
+import {
+  getSafeNotificationPermission,
+  subscribePushNotifications,
+  triggerAlertFeedback,
+  unlockAudio,
+} from '../utils/notify';
 
 interface PushNotificationsButtonProps {
   role: 'driver' | 'shop' | 'admin';
@@ -20,14 +25,15 @@ export const PushNotificationsButton: React.FC<PushNotificationsButtonProps> = (
   const [subscribing, setSubscribing] = useState(false);
 
   useEffect(() => {
+    const perm = getSafeNotificationPermission();
     const isSupported =
-      typeof window !== 'undefined' &&
-      'Notification' in window &&
+      perm !== 'unsupported' &&
+      typeof navigator !== 'undefined' &&
       'serviceWorker' in navigator;
     setSupported(isSupported);
     if (isSupported) {
-      setPermission(Notification.permission);
-      if (Notification.permission === 'granted') {
+      setPermission(perm);
+      if (perm === 'granted') {
         void subscribePushNotifications({
           role,
           orderId,

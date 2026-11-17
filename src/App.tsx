@@ -29,7 +29,24 @@ function readSavedOrders(): SavedOrderSummary[] {
     const raw = localStorage.getItem(SAVED_ORDERS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.slice(0, 10) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (o): o is SavedOrderSummary =>
+          Boolean(o) &&
+          typeof o === 'object' &&
+          typeof (o as SavedOrderSummary).id === 'string' &&
+          typeof (o as SavedOrderSummary).carBrandModel === 'string' &&
+          typeof (o as SavedOrderSummary).partName === 'string'
+      )
+      .map((o) => ({
+        id: o.id,
+        carBrandModel: o.carBrandModel,
+        year: typeof o.year === 'string' ? o.year : '',
+        partName: o.partName,
+        createdAt: typeof o.createdAt === 'string' ? o.createdAt : '',
+      }))
+      .slice(0, 10);
   } catch {
     return [];
   }
@@ -38,45 +55,57 @@ function readSavedOrders(): SavedOrderSummary[] {
 export default function App() {
   const [section, setSection] = useState<ActiveSection>(() => {
     if (typeof window === 'undefined') return 'driver';
-    const params = new URLSearchParams(window.location.search);
-    if (window.location.hash === '#admin' || params.get('panel') === 'admin') {
-      return 'admin';
-    }
-    if (params.get('tab') === 'shop') {
-      return 'shop';
-    }
-    if (!params.get('order') && !params.get('quickReply')) {
-      try {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (window.location.hash === '#admin' || params.get('panel') === 'admin') {
+        return 'admin';
+      }
+      if (params.get('tab') === 'shop') {
+        return 'shop';
+      }
+      if (!params.get('order') && !params.get('quickReply')) {
         if (
           localStorage.getItem('avtotap_preferred_section') === 'shop' &&
           localStorage.getItem('avtotap_shop_token')
         ) {
           return 'shop';
         }
-      } catch {
-        // ignore
       }
+    } catch {
+      // ignore restricted WebView/storage errors
     }
     return 'driver';
   });
 
   const [activeOrderId, setActiveOrderId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
-    return new URLSearchParams(window.location.search).get('order');
+    try {
+      return new URLSearchParams(window.location.search).get('order');
+    } catch {
+      return null;
+    }
   });
 
   const [initialOrderData, setInitialOrderData] = useState<RequestWithQuotes | null>(null);
   const [replyRequestId, setReplyRequestId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
-    return new URLSearchParams(window.location.search).get('reply');
+    try {
+      return new URLSearchParams(window.location.search).get('reply');
+    } catch {
+      return null;
+    }
   });
 
   const [quickReplyParams, setQuickReplyParams] = useState<{ requestId: string; shopToken: string } | null>(() => {
     if (typeof window === 'undefined') return null;
-    const params = new URLSearchParams(window.location.search);
-    const qr = params.get('quickReply');
-    const st = params.get('st');
-    return qr && st ? { requestId: qr, shopToken: st } : null;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const qr = params.get('quickReply');
+      const st = params.get('st');
+      return qr && st ? { requestId: qr, shopToken: st } : null;
+    } catch {
+      return null;
+    }
   });
 
   const [activeShopCount, setActiveShopCount] = useState<number>(0);
@@ -88,20 +117,24 @@ export default function App() {
 
     // If localStorage was cleared by OS/WebView, restore pinned Shop Cabinet from IndexedDB
     if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const hasExplicitDeepLink =
-        window.location.hash === '#admin' ||
-        params.get('panel') === 'admin' ||
-        Boolean(params.get('order')) ||
-        Boolean(params.get('quickReply'));
-      if (!hasExplicitDeepLink) {
-        void Promise.all([loadPreferredSection(), loadAuthTokenFromPhone('shop')]).then(
-          ([pref, savedShopToken]) => {
-            if (pref === 'shop' && savedShopToken) {
-              setSection('shop');
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const hasExplicitDeepLink =
+          window.location.hash === '#admin' ||
+          params.get('panel') === 'admin' ||
+          Boolean(params.get('order')) ||
+          Boolean(params.get('quickReply'));
+        if (!hasExplicitDeepLink) {
+          void Promise.all([loadPreferredSection(), loadAuthTokenFromPhone('shop')]).then(
+            ([pref, savedShopToken]) => {
+              if (pref === 'shop' && savedShopToken) {
+                setSection('shop');
+              }
             }
-          }
-        );
+          );
+        }
+      } catch {
+        // ignore
       }
     }
 
@@ -130,34 +163,42 @@ export default function App() {
   }, []);
 
   const updateUrlOrder = (orderId: string | null) => {
-    const url = new URL(window.location.href);
-    if (orderId) {
-      url.searchParams.set('order', orderId);
-      url.searchParams.delete('tab');
-      url.searchParams.delete('reply');
-    } else {
-      url.searchParams.delete('order');
+    try {
+      const url = new URL(window.location.href);
+      if (orderId) {
+        url.searchParams.set('order', orderId);
+        url.searchParams.delete('tab');
+        url.searchParams.delete('reply');
+      } else {
+        url.searchParams.delete('order');
+      }
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // ignore restricted history API
     }
-    window.history.replaceState({}, '', url.toString());
   };
 
   const navigateSection = (target: ActiveSection) => {
     setQuickReplyParams(null);
     setSection(target);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('quickReply');
-    url.searchParams.delete('st');
-    if (target === 'admin') {
-      url.hash = 'admin';
-    } else {
-      url.hash = '';
-      if (target === 'shop') {
-        url.searchParams.set('tab', 'shop');
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('quickReply');
+      url.searchParams.delete('st');
+      if (target === 'admin') {
+        url.hash = 'admin';
       } else {
-        url.searchParams.delete('tab');
+        url.hash = '';
+        if (target === 'shop') {
+          url.searchParams.set('tab', 'shop');
+        } else {
+          url.searchParams.delete('tab');
+        }
       }
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // ignore restricted history API
     }
-    window.history.replaceState({}, '', url.toString());
   };
 
   const handleOpenFullShopCabinetFromQuickReply = (shopToken: string) => {
@@ -177,14 +218,22 @@ export default function App() {
     };
     setSavedOrders((prev) => {
       const next = [summary, ...prev.filter((o) => o.id !== req.id)].slice(0, 10);
-      localStorage.setItem(SAVED_ORDERS_KEY, JSON.stringify(next));
+      try {
+        localStorage.setItem(SAVED_ORDERS_KEY, JSON.stringify(next));
+      } catch {
+        // ignore storage restrictions
+      }
       return next;
     });
     setInitialOrderData(req);
     setActiveOrderId(req.id);
     setSection('driver');
     updateUrlOrder(req.id);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    try {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch {
+      window.scrollTo(0, 0);
+    }
   };
 
   const handleOpenOrder = (orderId: string) => {
@@ -192,7 +241,11 @@ export default function App() {
     setActiveOrderId(orderId);
     setSection('driver');
     updateUrlOrder(orderId);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    try {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch {
+      window.scrollTo(0, 0);
+    }
   };
 
   const handleNewRequest = () => {
@@ -200,13 +253,21 @@ export default function App() {
     setActiveOrderId(null);
     setSection('driver');
     updateUrlOrder(null);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    try {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch {
+      window.scrollTo(0, 0);
+    }
   };
 
   const handleDeleteSavedOrder = (orderId: string) => {
     setSavedOrders((prev) => {
       const next = prev.filter((o) => o.id !== orderId);
-      localStorage.setItem(SAVED_ORDERS_KEY, JSON.stringify(next));
+      try {
+        localStorage.setItem(SAVED_ORDERS_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
       return next;
     });
     void deleteOrderSnapshotFromPhone(orderId);
@@ -218,7 +279,11 @@ export default function App() {
   const handleClearSavedOrders = () => {
     const idsToDelete = savedOrders.map((o) => o.id);
     setSavedOrders([]);
-    localStorage.removeItem(SAVED_ORDERS_KEY);
+    try {
+      localStorage.removeItem(SAVED_ORDERS_KEY);
+    } catch {
+      // ignore
+    }
     if (idsToDelete.length > 0) {
       void clearAllOrderSnapshotsFromPhone(idsToDelete);
     }

@@ -11,13 +11,18 @@ export function usePWAInstall() {
   const [isIOS, setIsIOS] = useState(false);
 
   useEffect(() => {
-    const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true;
-    setIsInstalled(isStandalone);
+    try {
+      const isStandalone =
+        (typeof window.matchMedia === 'function' &&
+          Boolean(window.matchMedia('(display-mode: standalone)')?.matches)) ||
+        (window.navigator as unknown as { standalone?: boolean })?.standalone === true;
+      setIsInstalled(isStandalone);
 
-    const ua = window.navigator.userAgent.toLowerCase();
-    setIsIOS(/iphone|ipad|ipod/.test(ua));
+      const ua = (window.navigator?.userAgent || '').toLowerCase();
+      setIsIOS(/iphone|ipad|ipod/.test(ua));
+    } catch {
+      // ignore restricted WebView environment
+    }
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();

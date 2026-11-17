@@ -14,7 +14,12 @@ import {
   X,
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
-import { subscribePushNotifications, triggerAlertFeedback, unlockAudio } from '../utils/notify';
+import {
+  getSafeNotificationPermission,
+  subscribePushNotifications,
+  triggerAlertFeedback,
+  unlockAudio,
+} from '../utils/notify';
 import { postJsonWithRetry } from '../utils/api';
 import {
   clearAuthTokenFromPhone,
@@ -64,6 +69,24 @@ interface ShopViewProps {
 
 const CONDITIONS: PartCondition[] = ['Orijinal', 'Dublikat', 'Üstən çıxma'];
 const AVAILABILITIES: PartAvailability[] = ['Mövcuddur', 'Anbarda son ədəd', 'Sifarişlə (1-2 gün)'];
+
+function isValidCachedShop(val: unknown): val is PublicShopInfo {
+  if (!val || typeof val !== 'object') return false;
+  const s = val as Partial<PublicShopInfo>;
+  return typeof s.id === 'string' && typeof s.name === 'string' && typeof s.status === 'string';
+}
+
+function normalizeCachedFeed(items: unknown): ShopFeedItem[] {
+  if (!Array.isArray(items)) return [];
+  return items.filter(
+    (item): item is ShopFeedItem =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      typeof (item as ShopFeedItem).id === 'string' &&
+      typeof (item as ShopFeedItem).carBrandModel === 'string' &&
+      typeof (item as ShopFeedItem).partName === 'string'
+  );
+}
 
 const GoogleBadgeIcon: React.FC = () => (
   <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
@@ -155,15 +178,16 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     if (!token) return;
     void Promise.all([loadShopProfileFromPhone(), loadShopFeedFromPhone()]).then(
       ([profileCache, feedCache]) => {
-        if (profileCache?.shop) {
-          setShop((prev) => prev || (profileCache.shop as unknown as PublicShopInfo));
-          if (profileCache.adminWhatsapp) {
+        if (profileCache?.shop && isValidCachedShop(profileCache.shop)) {
+          const cachedShop = profileCache.shop;
+          setShop((prev) => prev || cachedShop);
+          if (typeof profileCache.adminWhatsapp === 'string' && profileCache.adminWhatsapp) {
             setAdminWhatsapp((prev) => prev || profileCache.adminWhatsapp);
           }
           setLoading(false);
         }
         if (feedCache && Array.isArray(feedCache.requests)) {
-          const cachedItems = feedCache.requests as unknown as ShopFeedItem[];
+          const cachedItems = normalizeCachedFeed(feedCache.requests);
           cachedItems.forEach((r) => seenRequestIdsRef.current.add(r.id));
           feedInitializedRef.current = true;
           setFeed((prev) => (prev.length > 0 ? prev : cachedItems));
@@ -227,7 +251,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
         data.adminWhatsapp || ''
       );
 
-      const nextFeed: ShopFeedItem[] = Array.isArray(data.requests) ? data.requests : [];
+      const nextFeed: ShopFeedItem[] = normalizeCachedFeed(data.requests);
       if (feedInitializedRef.current) {
         const newlyArrived = nextFeed.filter((r) => !seenRequestIdsRef.current.has(r.id));
         if (newlyArrived.length > 0 && data.shop.isEffectivelyActive) {
@@ -267,7 +291,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   useEffect(() => {
     if (token) {
       void loadShopDashboard(token);
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      if (getSafeNotificationPermission() === 'granted') {
         void subscribePushNotifications({
           role: 'shop',
           authToken: token,
@@ -398,7 +422,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
 
     const syncNow = () => {
       void loadShopDashboard(token);
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      if (getSafeNotificationPermission() === 'granted') {
         void subscribePushNotifications({
           role: 'shop',
           authToken: token,
@@ -1129,9 +1153,10 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       </div>
 
       {/* Prominent Push Notification Activation Bar (only shown until enabled) */}
-      {typeof window !== 'undefined' &&
-        'Notification' in window &&
-        Notification.permission !== 'granted' && (
+      {(() => {
+        const notifPerm = getSafeNotificationPermission();
+        if (notifPerm === 'unsupported' || notifPerm === 'granted') return null;
+        return (
           <div className="mb-5 rounded-3xl border border-orange-200 bg-orange-50/90 p-4 sm:p-5 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -1139,19 +1164,20 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
                   Müştəri sifarişlərini qaçırmamaq üçün puş bildirişləri açın
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-700 leading-relaxed">
-                  {Notification.permission === 'denied'
+                  {notifPerm === 'denied'
                     ? 'Bildirişlər brauzer ayarlarından bloklanıb. Telefon ayarlarından bildiriş icazəsini «İcazə ver» edin.'
                     : 'Telefon bağlı olanda belə yeni sorğular səs və vibrasiya ilə dərhal gələcək.'}
                 </p>
               </div>
-              {Notification.permission !== 'denied' && (
+              {notifPerm !== 'denied' && (
                 <div className="shrink-0 sm:w-56">
                   <PushNotificationsButton role="shop" authToken={token} />
                 </div>
               )}
             </div>
           </div>
-        )}
+        );
+      })()}
 
       {newAlertBanner && (
         <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3.5 text-sm font-bold text-orange-950 shadow-sm">

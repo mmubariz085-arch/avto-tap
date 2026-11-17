@@ -139,14 +139,28 @@ export function playFeedbackSound(kind: FeedbackKind): void {
   }
 }
 
+export function getSafeNotificationPermission(): NotificationPermission | 'unsupported' {
+  try {
+    if (typeof window === 'undefined' || typeof Notification === 'undefined') {
+      return 'unsupported';
+    }
+    const perm = Notification.permission;
+    if (perm === 'granted' || perm === 'denied' || perm === 'default') {
+      return perm;
+    }
+    return 'unsupported';
+  } catch {
+    return 'unsupported';
+  }
+}
+
 export async function showSystemNotification(
   title: string,
   body: string,
   url = '/',
   tag = 'avtotap-alert'
 ): Promise<void> {
-  if (typeof window === 'undefined' || !('Notification' in window)) return;
-  if (Notification.permission !== 'granted') return;
+  if (getSafeNotificationPermission() !== 'granted') return;
 
   try {
     if ('serviceWorker' in navigator) {
@@ -224,18 +238,23 @@ export async function subscribePushNotifications(params: {
   authToken?: string | null;
   requestPermissionIfDefault?: boolean;
 }): Promise<'granted' | 'denied' | 'default' | 'unsupported'> {
+  let permission = getSafeNotificationPermission();
   if (
-    typeof window === 'undefined' ||
-    !('Notification' in window) ||
+    permission === 'unsupported' ||
+    typeof navigator === 'undefined' ||
     !('serviceWorker' in navigator) ||
+    typeof window === 'undefined' ||
     !('PushManager' in window)
   ) {
     return 'unsupported';
   }
 
-  let permission = Notification.permission;
   if (permission === 'default' && params.requestPermissionIfDefault) {
-    permission = await Notification.requestPermission();
+    try {
+      permission = await Notification.requestPermission();
+    } catch {
+      return 'unsupported';
+    }
   }
   if (permission !== 'granted') {
     return permission;

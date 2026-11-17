@@ -41,9 +41,24 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
   useEffect(() => {
     let active = true;
     void loadOrderSnapshotFromPhone(orderId).then((cached) => {
-      if (!active || !cached) return;
-      setOrder((prev) => prev || cached);
-      cached.quotes.forEach((q) => seenQuoteIdsRef.current.add(q.id));
+      if (
+        !active ||
+        !cached ||
+        typeof cached !== 'object' ||
+        typeof cached.id !== 'string' ||
+        typeof cached.carBrandModel !== 'string'
+      ) {
+        return;
+      }
+      const normalized: RequestWithQuotes = {
+        ...cached,
+        quotes: Array.isArray(cached.quotes) ? cached.quotes : [],
+        quoteCount: Array.isArray(cached.quotes) ? cached.quotes.length : 0,
+      };
+      setOrder((prev) => prev || normalized);
+      normalized.quotes.forEach((q) => {
+        if (q && typeof q.id === 'string') seenQuoteIdsRef.current.add(q.id);
+      });
       setLoading(false);
     });
     return () => {
@@ -59,8 +74,12 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
       const data = await res.json();
       if (!res.ok) {
         const cached = await loadOrderSnapshotFromPhone(orderId);
-        if (cached) {
-          setOrder(cached);
+        if (cached && typeof cached === 'object' && typeof cached.id === 'string') {
+          setOrder({
+            ...cached,
+            quotes: Array.isArray(cached.quotes) ? cached.quotes : [],
+            quoteCount: Array.isArray(cached.quotes) ? cached.quotes.length : 0,
+          });
           setErrorMsg(null);
           return;
         }
@@ -68,7 +87,12 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
         setOrder(null);
         return;
       }
-      const incomingOrder = data.request as RequestWithQuotes;
+      const rawReq = data.request as RequestWithQuotes;
+      const incomingOrder: RequestWithQuotes = {
+        ...rawReq,
+        quotes: Array.isArray(rawReq?.quotes) ? rawReq.quotes : [],
+        quoteCount: Array.isArray(rawReq?.quotes) ? rawReq.quotes.length : 0,
+      };
       if (initializedRef.current) {
         const newlyAdded = incomingOrder.quotes.filter((q) => !seenQuoteIdsRef.current.has(q.id));
         if (newlyAdded.length > 0) {
@@ -94,8 +118,12 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
       setErrorMsg(null);
     } catch {
       const cached = await loadOrderSnapshotFromPhone(orderId);
-      if (cached) {
-        setOrder(cached);
+      if (cached && typeof cached === 'object' && typeof cached.id === 'string') {
+        setOrder({
+          ...cached,
+          quotes: Array.isArray(cached.quotes) ? cached.quotes : [],
+          quoteCount: Array.isArray(cached.quotes) ? cached.quotes.length : 0,
+        });
         setErrorMsg(null);
       } else {
         setErrorMsg('Məlumat yüklənmədi. Yenidən cəhd edin.');
@@ -207,6 +235,8 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
     );
   }
 
+  const safeQuotes = Array.isArray(order.quotes) ? order.quotes : [];
+
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:py-9">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -262,7 +292,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
         {/* Order Summary Card (Obsidian High-Contrast Surface) */}
         <aside className="rounded-3xl bg-[#0B1120] p-6 text-white shadow-[0_14px_32px_-16px_rgba(11,17,32,0.5)] lg:col-span-4">
           <p className="font-mono text-xs font-semibold text-slate-400">
-            Sifariş · #{order.id.slice(-6).toUpperCase()}
+            Sifariş · #{String(order.id || '').slice(-6).toUpperCase()}
           </p>
           <h1 className="mt-2 font-display text-2xl font-extrabold tracking-tight text-white">
             {order.carBrandModel} <span className="font-mono font-bold text-slate-400">({order.year})</span>
@@ -304,11 +334,11 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg font-extrabold text-slate-950">
               Mağaza cavabları{' '}
-              <span className="font-mono tabular-nums text-slate-500">({order.quotes.length})</span>
+              <span className="font-mono tabular-nums text-slate-500">({safeQuotes.length})</span>
             </h2>
           </div>
 
-          {order.quotes.length === 0 ? (
+          {safeQuotes.length === 0 ? (
             <div className="rounded-3xl border border-slate-200/90 bg-white p-9 text-center shadow-sm">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
                 <RefreshCw className="h-6 w-6 animate-spin" />
@@ -320,7 +350,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
             </div>
           ) : (
             <div className="space-y-4">
-              {order.quotes.map((quote) => {
+              {safeQuotes.map((quote) => {
                 const waText = [
                   `Salam, ${quote.shopName}! Şərur AvtoZapcast üzərindən cavabınızı gördüm.`,
                   `Avtomobil: ${order.carBrandModel} (${order.year})`,
