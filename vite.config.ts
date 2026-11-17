@@ -61,6 +61,7 @@ export default defineConfig(() => {
         workbox: {
           importScripts: ['/sw-push.js'],
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           cleanupOutdatedCaches: true,
           skipWaiting: true,
           clientsClaim: true,

@@ -1,0 +1,187 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.email is string &&
+        request.auth.token.email.size() >= 3 &&
+        request.auth.token.email.size() <= 200;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'mmubariz085@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120)) &&
+        data.role in ['admin', 'shop'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidShopProfile(data) {
+      return data.keys().hasAll(['id', 'name', 'whatsapp', 'pin', 'tariff', 'expiresAt', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'ownerUid', 'ownerEmail', 'name', 'district', 'whatsapp', 'telegramChatId', 'pin', 'tariff', 'expiresAt', 'status', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        (!('ownerUid' in data) || (data.ownerUid is string && data.ownerUid.size() <= 128)) &&
+        (!('ownerEmail' in data) || (data.ownerEmail is string && data.ownerEmail.size() <= 200)) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 100 &&
+        (!('district' in data) || (data.district is string && data.district.size() <= 80)) &&
+        data.whatsapp is string && data.whatsapp.size() >= 7 && data.whatsapp.size() <= 32 &&
+        (!('telegramChatId' in data) || (data.telegramChatId is string && data.telegramChatId.size() <= 40)) &&
+        data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 12 &&
+        data.tariff in ['Test', 'Bazis 25 AZN', 'VIP 40 AZN'] &&
+        data.expiresAt is string && data.expiresAt.size() == 10 && data.expiresAt.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.status in ['Aktiv', 'Deaktiv'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAppSettings(data) {
+      return data.keys().hasAll(['adminWhatsapp', 'updatedAt']) &&
+        data.keys().hasOnly(['adminWhatsapp', 'updatedAt']) &&
+        data.adminWhatsapp is string && data.adminWhatsapp.size() >= 7 && data.adminWhatsapp.size() <= 32 &&
+        data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isVerifiedUser() && resource.data.uid == request.auth.uid);
+      allow create: if isValidId(userId) &&
+        isVerifiedUser() &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == userId &&
+        incoming().uid == request.auth.uid &&
+        incoming().email == request.auth.token.email &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (incoming().role == 'shop' || isBootstrappedAdmin());
+      allow update: if isValidId(userId) &&
+        isVerifiedUser() &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(userId) &&
+        isBootstrappedAdmin() &&
+        isValidAdminRecord(incoming()) &&
+        incoming().uid == userId &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(userId) && isBootstrappedAdmin();
+    }
+
+    match /shops/{shopId} {
+      allow get: if isValidId(shopId) && (isAdmin() || (isVerifiedUser() && existing().ownerUid == request.auth.uid));
+      allow list: if isBootstrappedAdmin() || (isVerifiedUser() && resource.data.ownerUid == request.auth.uid);
+      allow create: if isValidId(shopId) &&
+        isVerifiedUser() &&
+        isValidShopProfile(incoming()) &&
+        incoming().id == shopId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            incoming().ownerUid == request.auth.uid &&
+            incoming().ownerEmail == request.auth.token.email &&
+            incoming().tariff == 'Test' &&
+            incoming().status == 'Aktiv'
+          )
+        );
+      allow update: if isValidId(shopId) &&
+        isVerifiedUser() &&
+        isValidShopProfile(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid &&
+            incoming().ownerUid == existing().ownerUid &&
+            incoming().ownerEmail == existing().ownerEmail &&
+            incoming().tariff == existing().tariff &&
+            incoming().expiresAt == existing().expiresAt &&
+            incoming().status == existing().status &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'district', 'whatsapp', 'telegramChatId', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(shopId) && isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && isSignedIn();
+      allow list: if false;
+      allow create, update: if isValidId(settingId) &&
+        isAdmin() &&
+        isValidAppSettings(incoming()) &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+  }
+}

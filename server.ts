@@ -100,6 +100,8 @@ function toPublicShop(shop: Shop): PublicShopInfo {
   const expired = isShopExpired(shop);
   return {
     id: shop.id,
+    ownerUid: shop.ownerUid,
+    ownerEmail: shop.ownerEmail,
     name: shop.name,
     district: shop.district,
     whatsapp: shop.whatsapp,
@@ -110,6 +112,69 @@ function toPublicShop(shop: Shop): PublicShopInfo {
     isExpired: expired,
     isEffectivelyActive: shop.status === 'Aktiv' && !expired,
   };
+}
+
+const FIREBASE_CONFIG_PATH = path.join(__dirname, 'firebase-applet-config.json');
+const ADMIN_EMAILS = new Set(['mmubariz085@gmail.com']);
+
+function loadFirebaseApiKey(): string {
+  try {
+    if (fs.existsSync(FIREBASE_CONFIG_PATH)) {
+      const raw = fs.readFileSync(FIREBASE_CONFIG_PATH, 'utf-8');
+      const parsed = JSON.parse(raw) as { apiKey?: string };
+      if (typeof parsed.apiKey === 'string' && parsed.apiKey.trim()) {
+        return parsed.apiKey.trim();
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return process.env.FIREBASE_API_KEY?.trim() || '';
+}
+
+interface VerifiedFirebaseUser {
+  uid: string;
+  email: string;
+  emailVerified: boolean;
+  displayName?: string;
+}
+
+async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFirebaseUser | null> {
+  const cleanToken = String(idToken || '').trim();
+  const apiKey = loadFirebaseApiKey();
+  if (!cleanToken || !apiKey) return null;
+
+  try {
+    const resp = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: cleanToken }),
+      }
+    );
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as {
+      users?: Array<{
+        localId?: string;
+        email?: string;
+        emailVerified?: boolean;
+        displayName?: string;
+      }>;
+    };
+    const user = data.users?.[0];
+    if (!user?.localId || !user?.email || !user.emailVerified) {
+      return null;
+    }
+    return {
+      uid: user.localId,
+      email: user.email.trim().toLowerCase(),
+      emailVerified: Boolean(user.emailVerified),
+      displayName: user.displayName?.trim(),
+    };
+  } catch {
+    return null;
+  }
 }
 
 const DEFAULT_AUTH_SECRET =
@@ -562,7 +627,7 @@ async function startServer() {
     });
   });
 
-  // Shop login
+  // Shop login (WhatsApp + PIN legacy/fallback)
   app.post('/api/shop/login', (req, res) => {
     const { whatsapp, pin } = req.body ?? {};
     const targetDigits = normalizePhoneDigits(String(whatsapp || ''));
@@ -589,6 +654,161 @@ async function startServer() {
     });
 
     res.json({
+      token,
+      shop: toPublicShop(shop),
+      adminWhatsapp: db.settings.adminWhatsapp,
+    });
+  });
+
+  // Admin Gmail (Firebase Google Sign-In) login
+  app.post('/api/auth/firebase-admin', async (req, res) => {
+    const idToken = String(req.body?.idToken || '').trim();
+    if (!idToken) {
+      res.status(400).json({ error: 'Google giriş tokeni göndərilmədi.' });
+      return;
+    }
+    const verified = await verifyFirebaseIdToken(idToken);
+    if (!verified) {
+      res.status(401).json({ error: 'Gmail təsdiqlənmədi. Yenidən daxil olun.' });
+      return;
+    }
+    if (!ADMIN_EMAILS.has(verified.email)) {
+      res.status(403).json({
+        error: `Bu Gmail (${verified.email}) admin səlahiyyətinə malik deyil.`,
+      });
+      return;
+    }
+    const token = signToken({
+      role: 'admin',
+      uid: verified.uid,
+      email: verified.email,
+      exp: Date.now() + 1000 * 60 * 60 * 24 * 180,
+    });
+    res.json({
+      token,
+      email: verified.email,
+    });
+  });
+
+  // Shop Gmail (Firebase Google Sign-In) lookup / login
+  app.post('/api/auth/firebase-shop', async (req, res) => {
+    const idToken = String(req.body?.idToken || '').trim();
+    if (!idToken) {
+      res.status(400).json({ error: 'Google giriş tokeni göndərilmədi.' });
+      return;
+    }
+    const verified = await verifyFirebaseIdToken(idToken);
+    if (!verified) {
+      res.status(401).json({ error: 'Gmail təsdiqlənmədi. Yenidən daxil olun.' });
+      return;
+    }
+
+    const shop = db.shops.find(
+      (s) =>
+        s.ownerUid === verified.uid ||
+        (typeof s.ownerEmail === 'string' && s.ownerEmail.trim().toLowerCase() === verified.email)
+    );
+
+    if (!shop) {
+      res.json({
+        registered: false,
+        uid: verified.uid,
+        email: verified.email,
+        displayName: verified.displayName || '',
+      });
+      return;
+    }
+
+    let changed = false;
+    if (shop.ownerUid !== verified.uid) {
+      shop.ownerUid = verified.uid;
+      changed = true;
+    }
+    if (!shop.ownerEmail || shop.ownerEmail.toLowerCase() !== verified.email) {
+      shop.ownerEmail = verified.email;
+      changed = true;
+    }
+    if (changed) saveDb(db);
+
+    const token = signToken({
+      role: 'shop',
+      shopId: shop.id,
+      exp: Date.now() + 1000 * 60 * 60 * 24 * 3650,
+    });
+
+    res.json({
+      registered: true,
+      token,
+      shop: toPublicShop(shop),
+      adminWhatsapp: db.settings.adminWhatsapp,
+    });
+  });
+
+  // Shop Gmail registration
+  app.post('/api/shop/register-google', async (req, res) => {
+    const { idToken, name, whatsapp, district } = req.body ?? {};
+    const verified = await verifyFirebaseIdToken(String(idToken || ''));
+    if (!verified) {
+      res.status(401).json({ error: 'Gmail təsdiqlənmədi. Yenidən daxil olun.' });
+      return;
+    }
+
+    const cleanName = String(name || '').trim();
+    const cleanWhatsapp = String(whatsapp || '').trim();
+    const cleanDistrict = typeof district === 'string' ? district.trim() : '';
+
+    if (cleanName.length < 2 || normalizePhoneDigits(cleanWhatsapp).length < 9) {
+      res.status(400).json({ error: 'Mağaza adı (min 2 hərf) və düzgün WhatsApp nömrəsi daxil edin.' });
+      return;
+    }
+
+    let shop = db.shops.find(
+      (s) =>
+        s.ownerUid === verified.uid ||
+        (typeof s.ownerEmail === 'string' && s.ownerEmail.trim().toLowerCase() === verified.email)
+    );
+
+    if (!shop) {
+      const targetDigits = normalizePhoneDigits(cleanWhatsapp);
+      const unboundByPhone = db.shops.find(
+        (s) => !s.ownerUid && !s.ownerEmail && normalizePhoneDigits(s.whatsapp) === targetDigits
+      );
+      if (unboundByPhone) {
+        unboundByPhone.ownerUid = verified.uid;
+        unboundByPhone.ownerEmail = verified.email;
+        unboundByPhone.name = cleanName.slice(0, 100);
+        if (cleanDistrict) unboundByPhone.district = cleanDistrict.slice(0, 80);
+        shop = unboundByPhone;
+      }
+    }
+
+    if (!shop) {
+      shop = {
+        id: `shop_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+        ownerUid: verified.uid,
+        ownerEmail: verified.email,
+        name: cleanName.slice(0, 100),
+        district: cleanDistrict ? cleanDistrict.slice(0, 80) : undefined,
+        whatsapp: formatDisplayPhone(cleanWhatsapp),
+        telegramChatId: '',
+        pin: String(Math.floor(1000 + Math.random() * 9000)),
+        tariff: 'Test',
+        expiresAt: futureYmd(30),
+        status: 'Aktiv',
+        createdAt: new Date().toISOString(),
+      };
+      db.shops.unshift(shop);
+    }
+
+    saveDb(db);
+
+    const token = signToken({
+      role: 'shop',
+      shopId: shop.id,
+      exp: Date.now() + 1000 * 60 * 60 * 24 * 3650,
+    });
+
+    res.status(201).json({
       token,
       shop: toPublicShop(shop),
       adminWhatsapp: db.settings.adminWhatsapp,
@@ -928,11 +1148,13 @@ async function startServer() {
   app.post('/api/admin/shops', (req, res) => {
     if (!requireAdmin(req, res)) return;
 
-    const { name, district, whatsapp, telegramChatId, pin, tariff, expiresAt, status } = req.body ?? {};
+    const { name, district, whatsapp, telegramChatId, ownerEmail, ownerUid, pin, tariff, expiresAt, status } = req.body ?? {};
     const cleanName = String(name || '').trim();
     const cleanDistrict = typeof district === 'string' ? district.trim() : '';
     const cleanWhatsapp = String(whatsapp || '').trim();
     const cleanTelegramChatId = typeof telegramChatId === 'string' ? telegramChatId.trim() : '';
+    const cleanOwnerEmail = typeof ownerEmail === 'string' ? ownerEmail.trim().toLowerCase() : '';
+    const cleanOwnerUid = typeof ownerUid === 'string' ? ownerUid.trim() : '';
     const cleanPin = String(pin || '').trim();
 
     if (!cleanName || normalizePhoneDigits(cleanWhatsapp).length < 9 || cleanPin.length < 4) {
@@ -949,6 +1171,8 @@ async function startServer() {
 
     const newShop: Shop = {
       id: `shop_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+      ownerUid: cleanOwnerUid ? cleanOwnerUid.slice(0, 128) : undefined,
+      ownerEmail: cleanOwnerEmail ? cleanOwnerEmail.slice(0, 200) : undefined,
       name: cleanName.slice(0, 100),
       district: cleanDistrict ? cleanDistrict.slice(0, 80) : undefined,
       whatsapp: formatDisplayPhone(cleanWhatsapp),
@@ -981,6 +1205,14 @@ async function startServer() {
 
     const updated: Shop = {
       ...current,
+      ownerEmail:
+        typeof body.ownerEmail === 'string'
+          ? body.ownerEmail.trim().toLowerCase().slice(0, 200) || undefined
+          : current.ownerEmail,
+      ownerUid:
+        typeof body.ownerUid === 'string'
+          ? body.ownerUid.trim().slice(0, 128) || undefined
+          : current.ownerUid,
       name: typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 100) : current.name,
       district:
         typeof body.district === 'string'
@@ -1106,6 +1338,8 @@ async function startServer() {
 
         const restoredShop: Shop = {
           id,
+          ownerUid: typeof raw.ownerUid === 'string' && raw.ownerUid.trim() ? raw.ownerUid.trim().slice(0, 128) : undefined,
+          ownerEmail: typeof raw.ownerEmail === 'string' && raw.ownerEmail.trim() ? raw.ownerEmail.trim().toLowerCase().slice(0, 200) : undefined,
           name: name.slice(0, 100),
           district: typeof raw.district === 'string' && raw.district.trim() ? raw.district.trim().slice(0, 80) : undefined,
           whatsapp: formatDisplayPhone(whatsapp),

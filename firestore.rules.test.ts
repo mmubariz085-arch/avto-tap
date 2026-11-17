@@ -1,0 +1,97 @@
+/**
+ * Phase 0 Adversarial Rules Spec (Dirty Dozen)
+ * Verifies identity, RBAC isolation, subscription protection, and structural bounds.
+ */
+export const dirtyDozenCases = [
+  {
+    name: 'Unauthenticated shop read is denied',
+    auth: null,
+    op: 'get',
+    path: '/shops/shop_1',
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Unauthenticated shop create is denied',
+    auth: null,
+    op: 'create',
+    path: '/shops/shop_2',
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Unverified admin email spoof is denied',
+    auth: { uid: 'spoof_1', token: { email: 'mmubariz085@gmail.com', email_verified: false } },
+    op: 'create',
+    path: '/admins/spoof_1',
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Non-admin self-assigning admin role in /users is denied',
+    auth: { uid: 'shop_u1', token: { email: 'shop@gmail.com', email_verified: true } },
+    op: 'create',
+    path: '/users/shop_u1',
+    data: { role: 'admin' },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Shop user escalating role to admin on update is denied',
+    auth: { uid: 'shop_u1', token: { email: 'shop@gmail.com', email_verified: true } },
+    op: 'update',
+    path: '/users/shop_u1',
+    data: { role: 'admin' },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Non-admin creating /admins record is denied',
+    auth: { uid: 'shop_u1', token: { email: 'shop@gmail.com', email_verified: true } },
+    op: 'create',
+    path: '/admins/shop_u1',
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Shop self-upgrading tariff to VIP on create is denied',
+    auth: { uid: 'shop_u1', token: { email: 'shop@gmail.com', email_verified: true } },
+    op: 'create',
+    path: '/shops/shop_new',
+    data: { tariff: 'VIP 40 AZN' },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Shop modifying own expiresAt/status on update is denied',
+    auth: { uid: 'shop_u1', token: { email: 'shop@gmail.com', email_verified: true } },
+    op: 'update',
+    path: '/shops/shop_new',
+    data: { expiresAt: '2099-12-31', status: 'Aktiv' },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Cross-owner shop read/update is denied',
+    auth: { uid: 'shop_u2', token: { email: 'other@gmail.com', email_verified: true } },
+    op: 'update',
+    path: '/shops/shop_new',
+    data: { name: 'Hijacked' },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Shadow ghost field injection is denied',
+    auth: { uid: 'shop_u1', token: { email: 'shop@gmail.com', email_verified: true } },
+    op: 'update',
+    path: '/shops/shop_new',
+    data: { isVerified: true },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Oversized ID or 10KB string is denied',
+    auth: { uid: 'shop_u1', token: { email: 'shop@gmail.com', email_verified: true } },
+    op: 'create',
+    path: `/shops/${'a'.repeat(200)}`,
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: 'Backdated client timestamp on create is denied',
+    auth: { uid: 'shop_u1', token: { email: 'shop@gmail.com', email_verified: true } },
+    op: 'create',
+    path: '/shops/shop_backdate',
+    data: { createdAt: '2020-01-01T00:00:00Z' },
+    expected: 'PERMISSION_DENIED',
+  },
+];

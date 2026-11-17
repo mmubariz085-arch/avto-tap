@@ -8,6 +8,8 @@ export type PartAvailability = 'Mövcuddur' | 'Sifarişlə (1-2 gün)' | 'Anbard
 
 export interface Shop {
   id: string;
+  ownerUid?: string;
+  ownerEmail?: string;
   name: string;
   district?: string;
   whatsapp: string;
@@ -21,6 +23,8 @@ export interface Shop {
 
 export interface PublicShopInfo {
   id: string;
+  ownerUid?: string;
+  ownerEmail?: string;
   name: string;
   district?: string;
   whatsapp: string;

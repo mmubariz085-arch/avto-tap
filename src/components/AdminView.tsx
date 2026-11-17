@@ -39,6 +39,16 @@ import {
 } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import { QrPosterModal } from './QrPosterModal';
+import {
+  ADMIN_EMAIL,
+  deleteShopFromFirestore,
+  loadAllShopsFromFirestoreForAdmin,
+  mapFirebaseAuthErrorAz,
+  signInWithGmail,
+  signOutFirebase,
+  syncShopToFirestore,
+  syncUserProfileToFirestore,
+} from '../firebase';
 import type {
   AdminSettings,
   RequestWithQuotes,
@@ -66,12 +76,40 @@ function defaultExpiryDate(): string {
   return d.toISOString().slice(0, 10);
 }
 
+function formatSafeDateTimeAz(iso?: string): string {
+  if (!iso) return '—';
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return '—';
+  try {
+    return new Date(ts).toLocaleString('az-AZ');
+  } catch {
+    return new Date(ts).toISOString().slice(0, 16).replace('T', ' ');
+  }
+}
+
+const GoogleBadgeIcon: React.FC = () => (
+  <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+    <path
+      fill="#EA4335"
+      d="M12 10.2v3.9h5.4c-.2 1.2-1.5 3.6-5.4 3.6-3.2 0-5.9-2.7-5.9-6s2.7-6 5.9-6c1.8 0 3.1.8 3.8 1.5l2.6-2.5C16.7 3.1 14.6 2 12 2 6.5 2 2 6.5 2 12s4.5 10 10 10c5.8 0 9.6-4.1 9.6-9.8 0-.7-.1-1.2-.2-1.7H12z"
+    />
+  </svg>
+);
+
 export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('avtotap_admin_token'));
+  const [token, setToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('avtotap_admin_token');
+    } catch {
+      return null;
+    }
+  });
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordFallback, setShowPasswordFallback] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isGoogleLoggingIn, setIsGoogleLoggingIn] = useState(false);
 
   const [activeTab, setActiveTab] = useState<'shops' | 'requests'>('shops');
   const [shops, setShops] = useState<AdminShopRow[]>([]);
@@ -98,6 +136,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
   const [shopName, setShopName] = useState('');
   const [shopDistrict, setShopDistrict] = useState('');
   const [shopWhatsapp, setShopWhatsapp] = useState('+994 ');
+  const [shopOwnerEmail, setShopOwnerEmail] = useState('');
   const [shopTelegramChatId, setShopTelegramChatId] = useState('');
   const [shopPin, setShopPin] = useState('');
   const [shopTariff, setShopTariff] = useState<ShopTariff>('Bazis 25 AZN');
@@ -199,7 +238,31 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
       // Preserve existing phone backup if server booted empty unless explicit edit occurred
       const existingPhoneBackup = await loadAdminBackupFromPhone();
-      if (nextShops.length > 0 || forceSaveEmpty || !existingPhoneBackup?.shops.length) {
+      const backupShopsCount = Array.isArray(existingPhoneBackup?.shops)
+        ? existingPhoneBackup.shops.length
+        : 0;
+
+      // If server booted empty, attempt silent restore from Firestore cloud
+      if (nextShops.length === 0 && !forceSaveEmpty) {
+        try {
+          const cloudShops = await loadAllShopsFromFirestoreForAdmin();
+          if (cloudShops.length > 0) {
+            const restoreRes = await postJsonWithRetry<{ restoredCount?: number }>(
+              '/api/admin/restore-snapshot',
+              { shops: cloudShops, adminWhatsapp: nextSettings.adminWhatsapp },
+              { token: activeToken, retries: 1, timeoutMs: 12000 }
+            );
+            if (restoreRes.ok && (restoreRes.data.restoredCount || 0) > 0) {
+              void fetchDashboard(activeToken, true);
+              return;
+            }
+          }
+        } catch {
+          // ignore if admin isn't signed in to Firebase yet
+        }
+      }
+
+      if (nextShops.length > 0 || forceSaveEmpty || backupShopsCount === 0) {
         const saved = await saveAdminBackupToPhone(nextShops, nextSettings);
         setPhoneBackup(saved);
       } else {
@@ -227,13 +290,14 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     let closedByUser = false;
 
     const connect = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${window.location.host}/ws?role=admin&token=${encodeURIComponent(token)}`;
-      socket = new WebSocket(url);
+      try {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${proto}//${window.location.host}/ws?role=admin&token=${encodeURIComponent(token)}`;
+        socket = new WebSocket(url);
 
-      socket.onopen = () => {
-        void fetchDashboard(token);
-      };
+        socket.onopen = () => {
+          void fetchDashboard(token);
+        };
 
       socket.onmessage = (evt) => {
         try {
@@ -284,11 +348,16 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         }
       };
 
-      socket.onclose = () => {
+        socket.onclose = () => {
+          if (!closedByUser) {
+            reconnectTimer = window.setTimeout(connect, 3000);
+          }
+        };
+      } catch {
         if (!closedByUser) {
           reconnectTimer = window.setTimeout(connect, 3000);
         }
-      };
+      }
     };
 
     connect();
@@ -299,9 +368,52 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     };
   }, [token, fetchDashboard]);
 
+  const handleGoogleLogin = async () => {
+    if (isGoogleLoggingIn || isLoggingIn) return;
+    setLoginError(null);
+    setIsGoogleLoggingIn(true);
+    try {
+      const user = await signInWithGmail();
+      const email = (user.email || '').trim().toLowerCase();
+      if (!user.emailVerified || email !== ADMIN_EMAIL) {
+        await signOutFirebase();
+        setLoginError(
+          `Bu Gmail (${email || 'naməlum'}) admin deyil. Zəhmət olmasa ${ADMIN_EMAIL} hesabı ilə daxil olun.`
+        );
+        return;
+      }
+
+      const idToken = await user.getIdToken();
+      const result = await postJsonWithRetry<{ token?: string; error?: string }>(
+        '/api/auth/firebase-admin',
+        { idToken },
+        { retries: 2, timeoutMs: 15000 }
+      );
+      if (!result.ok || !result.data.token) {
+        setLoginError(result.data.error || 'Admin girişi təsdiqlənmədi.');
+        return;
+      }
+
+      try {
+        await syncUserProfileToFirestore(user, 'admin');
+      } catch {
+        // non-blocking firestore profile sync
+      }
+
+      await saveAuthTokenToPhone('admin', result.data.token);
+      setToken(result.data.token);
+      setPassword('');
+      setLoading(true);
+    } catch (err) {
+      setLoginError(mapFirebaseAuthErrorAz(err));
+    } finally {
+      setIsGoogleLoggingIn(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isLoggingIn) return;
+    if (isLoggingIn || isGoogleLoggingIn) return;
     setLoginError(null);
     setIsLoggingIn(true);
     try {
@@ -325,6 +437,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
 
   const handleLogout = () => {
     void clearAuthTokenFromPhone('admin');
+    void signOutFirebase();
     setToken(null);
     setShops([]);
     setRequests([]);
@@ -473,6 +586,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     setShopName('');
     setShopDistrict('');
     setShopWhatsapp('+994 ');
+    setShopOwnerEmail('');
     setShopTelegramChatId(prefillChatId);
     setShopPin(String(Math.floor(1000 + Math.random() * 9000)));
     setShopTariff('Bazis 25 AZN');
@@ -487,6 +601,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     setShopName(shop.name);
     setShopDistrict(shop.district || '');
     setShopWhatsapp(shop.whatsapp);
+    setShopOwnerEmail(shop.ownerEmail || '');
     setShopTelegramChatId(shop.telegramChatId || '');
     setShopPin(shop.pin);
     setShopTariff(shop.tariff);
@@ -514,6 +629,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
           name: shopName.trim(),
           district: shopDistrict.trim(),
           whatsapp: shopWhatsapp.trim(),
+          ownerEmail: shopOwnerEmail.trim().toLowerCase(),
           telegramChatId: shopTelegramChatId.trim(),
           pin: shopPin.trim(),
           tariff: shopTariff,
@@ -525,6 +641,9 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       if (!res.ok) {
         setShopFormError(data.error || 'Yadda saxlanmadı.');
         return;
+      }
+      if (data.shop) {
+        void syncShopToFirestore(data.shop as Shop, { asAdmin: true }).catch(() => {});
       }
       setShowShopModal(false);
       await fetchDashboard(token, true);
@@ -539,7 +658,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
     if (!token) return;
     const nextStatus: ShopStatus = shop.status === 'Aktiv' ? 'Deaktiv' : 'Aktiv';
     try {
-      await fetch(`/api/admin/shops/${shop.id}`, {
+      const res = await fetch(`/api/admin/shops/${shop.id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -547,6 +666,10 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         },
         body: JSON.stringify({ status: nextStatus }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.shop) {
+        void syncShopToFirestore(data.shop as Shop, { asAdmin: true }).catch(() => {});
+      }
       await fetchDashboard(token, true);
     } catch {
       // ignore
@@ -560,6 +683,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
+      void deleteShopFromFirestore(shopId).catch(() => {});
       await fetchDashboard(token, true);
     } catch {
       // ignore
@@ -646,38 +770,20 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
             </div>
             <div>
               <h1 className="font-display text-xl font-extrabold text-slate-950">Admin panel</h1>
-              <p className="text-xs text-slate-500">Yalnız sistem sahibi üçün qapalı giriş</p>
+              <p className="text-xs text-slate-500">Yalnız sistem sahibi ({ADMIN_EMAIL}) üçün giriş</p>
             </div>
           </div>
 
-          <form onSubmit={handleLogin} className="mt-6 space-y-4">
-            <div>
-              <label htmlFor="admin-password" className="block text-sm font-bold text-slate-900">
-                Admin şifrəsi
-              </label>
-              <div className="relative mt-1.5">
-                <input
-                  id="admin-password"
-                  type={showPassword ? 'text' : 'password'}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Şifrəni daxil edin"
-                  className="w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 pl-4 pr-12 text-base text-slate-950 transition-colors focus:border-slate-950 focus:bg-white focus:outline-none focus:ring-4 focus:ring-slate-900/10"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  aria-label={showPassword ? 'Şifrəni gizlət' : 'Şifrəni göstər'}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-                >
-                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                </button>
-              </div>
-            </div>
+          <div className="mt-6 space-y-4">
+            <button
+              type="button"
+              disabled={isGoogleLoggingIn || isLoggingIn}
+              onClick={() => void handleGoogleLogin()}
+              className="flex w-full min-h-[54px] items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-base font-bold text-slate-950 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-60"
+            >
+              <GoogleBadgeIcon />
+              <span>{isGoogleLoggingIn ? 'Gmail yoxlanılır...' : 'Google (Gmail) ilə daxil ol'}</span>
+            </button>
 
             {loginError && (
               <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
@@ -685,22 +791,64 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={isLoggingIn}
-              className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
-            >
-              <KeyRound className="h-4 w-4" />
-              <span>{isLoggingIn ? 'Yoxlanılır...' : 'Daxil ol'}</span>
-            </button>
-          </form>
+            <div className="pt-2 text-center">
+              <button
+                type="button"
+                onClick={() => setShowPasswordFallback((v) => !v)}
+                className="text-xs font-semibold text-slate-500 underline underline-offset-2 hover:text-slate-900"
+              >
+                {showPasswordFallback ? 'Şifrə bölməsini gizlət' : 'Şifrə ilə ehtiyat giriş'}
+              </button>
+            </div>
+
+            {showPasswordFallback && (
+              <form onSubmit={handleLogin} className="space-y-3 border-t border-slate-100 pt-4">
+                <div>
+                  <label htmlFor="admin-password" className="block text-xs font-bold text-slate-800">
+                    Admin şifrəsi
+                  </label>
+                  <div className="relative mt-1.5">
+                    <input
+                      id="admin-password"
+                      type={showPassword ? 'text' : 'password'}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Şifrəni daxil edin"
+                      className="w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 pl-4 pr-12 text-base text-slate-950 transition-colors focus:border-slate-950 focus:bg-white focus:outline-none focus:ring-4 focus:ring-slate-900/10"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'Şifrəni gizlət' : 'Şifrəni göstər'}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                    >
+                      {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoggingIn || isGoogleLoggingIn}
+                  className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
+                >
+                  <KeyRound className="h-4 w-4" />
+                  <span>{isLoggingIn ? 'Yoxlanılır...' : 'Şifrə ilə daxil ol'}</span>
+                </button>
+              </form>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
-  const canOfferOneTapRestore =
-    shops.length === 0 && Boolean(phoneBackup && phoneBackup.shops.length > 0);
+  const backupShopsList = Array.isArray(phoneBackup?.shops) ? phoneBackup.shops : [];
+  const canOfferOneTapRestore = shops.length === 0 && backupShopsList.length > 0;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-9">
@@ -822,10 +970,10 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
             <section className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-amber-300 bg-amber-50 p-5 shadow-sm">
               <div>
                 <h2 className="font-display text-base font-extrabold text-slate-950">
-                  Telefon yaddaşında {phoneBackup.shops.length} mağaza tapıldı
+                  Telefon yaddaşında {backupShopsList.length} mağaza tapıldı
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-700">
-                  Son saxlanma: {new Date(phoneBackup.savedAt).toLocaleString('az-AZ')}. Bir toxunuşla bərpa edə bilərsiniz.
+                  Son saxlanma: {formatSafeDateTimeAz(phoneBackup.savedAt)}. Bir toxunuşla bərpa edə bilərsiniz.
                 </p>
               </div>
               <button
@@ -1011,13 +1159,13 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                         </span>
                       </div>
                       <div>
-                        <span className="block text-slate-500">Telegram Chat ID</span>
+                        <span className="block text-slate-500">Gmail hesabı</span>
                         <span
                           className={`font-mono font-semibold break-all ${
-                            shop.telegramChatId ? 'text-sky-700' : 'text-slate-400'
+                            shop.ownerEmail ? 'text-sky-700' : 'text-slate-400'
                           }`}
                         >
-                          {shop.telegramChatId || 'Bağlanmayıb'}
+                          {shop.ownerEmail || 'Bağlanmayıb'}
                         </span>
                       </div>
                       <div>
@@ -1086,7 +1234,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                   <p className="text-xs text-slate-500">
                     {storageStats.persisted ? 'Qorunan daimi yaddaş' : 'Yerli brauzer yaddaşı'} ·{' '}
                     <span className="font-mono tabular-nums">
-                      {phoneBackup?.shops.length ?? 0} mağaza · {storageStats.usedKb} KB
+                      {backupShopsList.length} mağaza · {storageStats.usedKb} KB
                     </span>
                   </p>
                 </div>
@@ -1102,7 +1250,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                   <span>Telefona yaz</span>
                 </button>
 
-                {phoneBackup && phoneBackup.shops.length > 0 && (
+                {phoneBackup && backupShopsList.length > 0 && (
                   <button
                     type="button"
                     disabled={isRestoringBackup}
@@ -1360,6 +1508,19 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
                     required
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700">
+                  Mağaza Gmail ünvanı <span className="font-normal text-slate-500">(Google girişi üçün)</span>
+                </label>
+                <input
+                  type="email"
+                  value={shopOwnerEmail}
+                  onChange={(e) => setShopOwnerEmail(e.target.value)}
+                  placeholder="magaza@gmail.com"
+                  className="mt-1 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-3.5 font-mono text-sm text-slate-950 focus:border-slate-900 focus:bg-white focus:outline-none"
+                />
               </div>
 
               {/* Telegram Chat ID with inline picker */}

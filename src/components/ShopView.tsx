@@ -29,11 +29,21 @@ import {
   saveShopProfileToPhone,
 } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
+import {
+  auth,
+  loadMyShopFromFirestore,
+  mapFirebaseAuthErrorAz,
+  signInWithGmail,
+  signOutFirebase,
+  syncShopToFirestore,
+  syncUserProfileToFirestore,
+} from '../firebase';
 import type {
   PartAvailability,
   PartCondition,
   PartRequest,
   PublicShopInfo,
+  Shop,
   ShopQuote,
   WsEvent,
 } from '../types';
@@ -51,18 +61,50 @@ interface ShopViewProps {
 const CONDITIONS: PartCondition[] = ['Orijinal', 'Dublikat', 'Üstən çıxma'];
 const AVAILABILITIES: PartAvailability[] = ['Mövcuddur', 'Anbarda son ədəd', 'Sifarişlə (1-2 gün)'];
 
+const GoogleBadgeIcon: React.FC = () => (
+  <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+    <path
+      fill="#EA4335"
+      d="M12 10.2v3.9h5.4c-.2 1.2-1.5 3.6-5.4 3.6-3.2 0-5.9-2.7-5.9-6s2.7-6 5.9-6c1.8 0 3.1.8 3.8 1.5l2.6-2.5C16.7 3.1 14.6 2 12 2 6.5 2 2 6.5 2 12s4.5 10 10 10c5.8 0 9.6-4.1 9.6-9.8 0-.7-.1-1.2-.2-1.7H12z"
+    />
+  </svg>
+);
+
 export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReplyId }) => {
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('avtotap_shop_token'));
+  const [token, setToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('avtotap_shop_token');
+    } catch {
+      return null;
+    }
+  });
   const [shop, setShop] = useState<PublicShopInfo | null>(null);
   const [adminWhatsapp, setAdminWhatsapp] = useState<string>('');
   const [feed, setFeed] = useState<ShopFeedItem[]>([]);
   const [loading, setLoading] = useState<boolean>(Boolean(token));
 
-  // Login state
-  const [loginPhone, setLoginPhone] = useState(() => localStorage.getItem('avtotap_shop_phone') || '+994 ');
+  // Login & Gmail registration state
+  const [loginPhone, setLoginPhone] = useState(() => {
+    try {
+      return localStorage.getItem('avtotap_shop_phone') || '+994 ';
+    } catch {
+      return '+994 ';
+    }
+  });
   const [loginPin, setLoginPin] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [showPinFallback, setShowPinFallback] = useState(false);
+  const [pendingGoogleReg, setPendingGoogleReg] = useState<{
+    uid: string;
+    email: string;
+    displayName: string;
+  } | null>(null);
+  const [regShopName, setRegShopName] = useState('');
+  const [regWhatsapp, setRegWhatsapp] = useState('+994 ');
+  const [regDistrict, setRegDistrict] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
 
   // Quote modal state
   const [activeRequest, setActiveRequest] = useState<ShopFeedItem | null>(null);
@@ -269,60 +311,67 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     let closedByUser = false;
 
     const connect = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${window.location.host}/ws?role=shop&token=${encodeURIComponent(token)}`;
-      socket = new WebSocket(url);
+      try {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${proto}//${window.location.host}/ws?role=shop&token=${encodeURIComponent(token)}`;
+        socket = new WebSocket(url);
 
-      socket.onopen = () => {
-        setWsConnected(true);
-        void loadShopDashboard(token);
-      };
+        socket.onopen = () => {
+          setWsConnected(true);
+          void loadShopDashboard(token);
+        };
 
-      socket.onmessage = (evt) => {
-        try {
-          const event = JSON.parse(evt.data) as WsEvent;
-          if (event.type === 'request:created') {
-            const incoming = event.payload;
-            const alreadySeen = seenRequestIdsRef.current.has(incoming.id);
-            seenRequestIdsRef.current.add(incoming.id);
-            setFeed((prev) => {
-              if (prev.some((r) => r.id === incoming.id)) return prev;
-              const nextItem: ShopFeedItem = {
-                ...incoming,
-                myQuote: null,
-                totalQuotes: incoming.quoteCount || 0,
-              };
-              return [nextItem, ...prev];
-            });
-            if (!alreadySeen) {
-              triggerAlertFeedback('incoming', {
-                sound: soundEnabledRef.current,
-                vibrate: soundEnabledRef.current,
-                notification: {
-                  title: `Yeni sorğu: ${incoming.carBrandModel} (${incoming.year})`,
-                  body: incoming.partName,
-                  url: `/?tab=shop&reply=${encodeURIComponent(incoming.id)}`,
-                  tag: `req-${incoming.id}`,
-                },
+        socket.onmessage = (evt) => {
+          try {
+            const event = JSON.parse(evt.data) as WsEvent;
+            if (event.type === 'request:created') {
+              const incoming = event.payload;
+              const alreadySeen = seenRequestIdsRef.current.has(incoming.id);
+              seenRequestIdsRef.current.add(incoming.id);
+              setFeed((prev) => {
+                if (prev.some((r) => r.id === incoming.id)) return prev;
+                const nextItem: ShopFeedItem = {
+                  ...incoming,
+                  myQuote: null,
+                  totalQuotes: incoming.quoteCount || 0,
+                };
+                return [nextItem, ...prev];
               });
-              setNewAlertBanner(`Yeni sorğu: ${incoming.carBrandModel} (${incoming.year}) — ${incoming.partName}`);
+              if (!alreadySeen) {
+                triggerAlertFeedback('incoming', {
+                  sound: soundEnabledRef.current,
+                  vibrate: soundEnabledRef.current,
+                  notification: {
+                    title: `Yeni sorğu: ${incoming.carBrandModel} (${incoming.year})`,
+                    body: incoming.partName,
+                    url: `/?tab=shop&reply=${encodeURIComponent(incoming.id)}`,
+                    tag: `req-${incoming.id}`,
+                  },
+                });
+                setNewAlertBanner(`Yeni sorğu: ${incoming.carBrandModel} (${incoming.year}) — ${incoming.partName}`);
+              }
+            } else if (event.type === 'request:deleted') {
+              setFeed((prev) => prev.filter((r) => r.id !== event.payload.requestId));
+            } else if (event.type === 'shop:updated') {
+              void loadShopDashboard(token);
             }
-          } else if (event.type === 'request:deleted') {
-            setFeed((prev) => prev.filter((r) => r.id !== event.payload.requestId));
-          } else if (event.type === 'shop:updated') {
-            void loadShopDashboard(token);
+          } catch {
+            // ignore
           }
-        } catch {
-          // ignore
-        }
-      };
+        };
 
-      socket.onclose = () => {
+        socket.onclose = () => {
+          setWsConnected(false);
+          if (!closedByUser) {
+            reconnectTimer = window.setTimeout(connect, 3000);
+          }
+        };
+      } catch {
         setWsConnected(false);
         if (!closedByUser) {
           reconnectTimer = window.setTimeout(connect, 3000);
         }
-      };
+      }
     };
 
     connect();
@@ -420,10 +469,179 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     }
   };
 
+  const handleShopGoogleLogin = async () => {
+    if (isGoogleLoading || isLoggingIn || isRegistering) return;
+    setLoginError(null);
+    setIsGoogleLoading(true);
+    try {
+      const user = await signInWithGmail();
+      const idToken = await user.getIdToken();
+      try {
+        await syncUserProfileToFirestore(user, 'shop');
+      } catch {
+        // non-blocking
+      }
+
+      const result = await postJsonWithRetry<{
+        registered?: boolean;
+        token?: string;
+        shop?: PublicShopInfo;
+        adminWhatsapp?: string;
+        uid?: string;
+        email?: string;
+        displayName?: string;
+        error?: string;
+      }>(
+        '/api/auth/firebase-shop',
+        { idToken },
+        { retries: 2, timeoutMs: 15000 }
+      );
+
+      if (!result.ok) {
+        setLoginError(result.data.error || 'Gmail ilə giriş alınmadı.');
+        return;
+      }
+
+      if (result.data.registered && result.data.token && result.data.shop) {
+        await saveAuthTokenToPhone('shop', result.data.token);
+        await savePreferredSection('shop');
+        await saveShopProfileToPhone(
+          result.data.shop as unknown as Record<string, unknown>,
+          result.data.adminWhatsapp || ''
+        );
+        setPendingGoogleReg(null);
+        setToken(result.data.token);
+        setShop(result.data.shop);
+        setAdminWhatsapp(result.data.adminWhatsapp || '');
+        setLoading(true);
+        return;
+      }
+
+      // Check Firestore in case container restarted and shop was saved in cloud
+      try {
+        const cloudShop = await loadMyShopFromFirestore(user.uid);
+        if (cloudShop && cloudShop.name && cloudShop.whatsapp) {
+          const restored = await postJsonWithRetry<{
+            token?: string;
+            shop?: PublicShopInfo;
+            adminWhatsapp?: string;
+          }>(
+            '/api/shop/register-google',
+            {
+              idToken,
+              name: cloudShop.name,
+              whatsapp: cloudShop.whatsapp,
+              district: cloudShop.district || '',
+            },
+            { retries: 1, timeoutMs: 15000 }
+          );
+          if (restored.ok && restored.data.token && restored.data.shop) {
+            await saveAuthTokenToPhone('shop', restored.data.token);
+            await savePreferredSection('shop');
+            await saveShopProfileToPhone(
+              restored.data.shop as unknown as Record<string, unknown>,
+              restored.data.adminWhatsapp || ''
+            );
+            setPendingGoogleReg(null);
+            setToken(restored.data.token);
+            setShop(restored.data.shop);
+            setAdminWhatsapp(restored.data.adminWhatsapp || '');
+            setLoading(true);
+            return;
+          }
+        }
+      } catch {
+        // ignore if no cloud shop yet
+      }
+
+      setPendingGoogleReg({
+        uid: user.uid,
+        email: (user.email || result.data.email || '').toLowerCase(),
+        displayName: user.displayName || result.data.displayName || '',
+      });
+    } catch (err) {
+      setLoginError(mapFirebaseAuthErrorAz(err));
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
+
+  const handleCompleteGoogleRegistration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingGoogleReg || isRegistering) return;
+    setLoginError(null);
+
+    if (regShopName.trim().length < 2) {
+      setLoginError('Zəhmət olmasa mağazanızın adını daxil edin.');
+      return;
+    }
+
+    setIsRegistering(true);
+    try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        setLoginError('Gmail sessiyası bitdi. Yenidən Google ilə daxil olun.');
+        setPendingGoogleReg(null);
+        return;
+      }
+      const idToken = await currentUser.getIdToken();
+      const result = await postJsonWithRetry<{
+        token?: string;
+        shop?: PublicShopInfo;
+        adminWhatsapp?: string;
+        error?: string;
+      }>(
+        '/api/shop/register-google',
+        {
+          idToken,
+          name: regShopName.trim(),
+          whatsapp: regWhatsapp.trim(),
+          district: regDistrict.trim(),
+        },
+        { retries: 2, timeoutMs: 15000 }
+      );
+
+      if (!result.ok || !result.data.token || !result.data.shop) {
+        setLoginError(result.data.error || 'Qeydiyyat tamamlanmadı.');
+        return;
+      }
+
+      const fullShop: Shop = {
+        ...result.data.shop,
+        pin: '0000',
+        createdAt: new Date().toISOString(),
+      };
+      try {
+        await syncUserProfileToFirestore(currentUser, 'shop');
+        await syncShopToFirestore(fullShop);
+      } catch {
+        // non-blocking firestore sync
+      }
+
+      await saveAuthTokenToPhone('shop', result.data.token);
+      await savePreferredSection('shop');
+      await saveShopProfileToPhone(
+        result.data.shop as unknown as Record<string, unknown>,
+        result.data.adminWhatsapp || ''
+      );
+      setPendingGoogleReg(null);
+      setToken(result.data.token);
+      setShop(result.data.shop);
+      setAdminWhatsapp(result.data.adminWhatsapp || '');
+      setLoading(true);
+    } catch (err) {
+      setLoginError(mapFirebaseAuthErrorAz(err));
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
   const handleLogout = () => {
     void clearAuthTokenFromPhone('shop');
     void clearPreferredSection();
     void clearShopProfileFromPhone();
+    void signOutFirebase();
+    setPendingGoogleReg(null);
     setToken(null);
     setShop(null);
     setFeed([]);
@@ -499,7 +717,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     }
   };
 
-  // Login Screen
+  // Login / Gmail Registration Screen
   if (!token || (!shop && !loading)) {
     return (
       <div className="mx-auto w-full max-w-md px-4 py-8 sm:py-14">
@@ -510,62 +728,176 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             </div>
             <div>
               <h1 className="font-display text-xl font-extrabold text-slate-950">Mağaza kabineti</h1>
-              <p className="text-xs text-slate-500">Mağaza və ya ölüxana girişi</p>
+              <p className="text-xs text-slate-500">
+                {pendingGoogleReg
+                  ? 'Yeni mağaza qeydiyyatını tamamlayın'
+                  : 'Gmail ilə daxil olun və ya mağazanızı qeyd edin'}
+              </p>
             </div>
           </div>
 
-          <form onSubmit={handleLogin} className="mt-6 space-y-4">
-            <div>
-              <label htmlFor="shop-phone" className="block text-sm font-bold text-slate-900">
-                Telefon nömrəsi (WhatsApp)
-              </label>
-              <input
-                id="shop-phone"
-                type="tel"
-                inputMode="tel"
-                value={loginPhone}
-                onChange={(e) => setLoginPhone(e.target.value)}
-                placeholder="+994 50 555 10 10"
-                className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
-                required
-              />
-            </div>
-
-            <div>
-              <label htmlFor="shop-pin" className="block text-sm font-bold text-slate-900">
-                PIN kod
-              </label>
-              <input
-                id="shop-pin"
-                type="password"
-                inputMode="numeric"
-                value={loginPin}
-                onChange={(e) => setLoginPin(e.target.value)}
-                placeholder="Administrator tərəfindən verilən PIN"
-                className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
-                required
-              />
-            </div>
-
-            {loginError && (
-              <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
-                {loginError}
+          {pendingGoogleReg ? (
+            <form onSubmit={handleCompleteGoogleRegistration} className="mt-6 space-y-4">
+              <div className="flex items-center justify-between gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs">
+                <div className="min-w-0">
+                  <span className="block font-semibold text-emerald-800">Təsdiqlənmiş Gmail</span>
+                  <span className="block truncate font-mono font-bold text-slate-950">
+                    {pendingGoogleReg.email}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void signOutFirebase();
+                    setPendingGoogleReg(null);
+                    setLoginError(null);
+                  }}
+                  className="shrink-0 font-bold text-slate-600 underline underline-offset-2 hover:text-slate-950"
+                >
+                  Dəyiş
+                </button>
               </div>
-            )}
 
-            <button
-              type="submit"
-              disabled={isLoggingIn}
-              className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-3 text-base font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
-            >
-              <Lock className="h-4 w-4" />
-              <span>{isLoggingIn ? 'Yoxlanılır...' : 'Kabinetə daxil ol'}</span>
-            </button>
-          </form>
+              <div>
+                <label htmlFor="reg-shop-name" className="block text-sm font-bold text-slate-900">
+                  Mağazanın adı
+                </label>
+                <input
+                  id="reg-shop-name"
+                  type="text"
+                  value={regShopName}
+                  onChange={(e) => setRegShopName(e.target.value)}
+                  placeholder="Məsələn: Şərur Avto Zapçast"
+                  className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 text-base text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                  required
+                />
+              </div>
 
-          <p className="mt-5 text-xs leading-relaxed text-slate-500">
-            Mağazanızı sistemə qoşmaq və ya PIN kod almaq üçün administrator ilə əlaqə saxlayın.
-          </p>
+              <div>
+                <label htmlFor="reg-shop-wa" className="block text-sm font-bold text-slate-900">
+                  WhatsApp nömrəsi (müştərilər üçün)
+                </label>
+                <input
+                  id="reg-shop-wa"
+                  type="tel"
+                  inputMode="tel"
+                  value={regWhatsapp}
+                  onChange={(e) => setRegWhatsapp(e.target.value)}
+                  placeholder="+994 50 555 10 10"
+                  className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                  required
+                />
+              </div>
+
+              <div>
+                <label htmlFor="reg-shop-district" className="block text-sm font-bold text-slate-900">
+                  Ünvan <span className="font-normal text-slate-500">(istəyə bağlı)</span>
+                </label>
+                <input
+                  id="reg-shop-district"
+                  type="text"
+                  value={regDistrict}
+                  onChange={(e) => setRegDistrict(e.target.value)}
+                  placeholder="Məsələn: Şərur, Mərkəzi küçə"
+                  className="mt-1.5 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 text-sm text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                />
+              </div>
+
+              {loginError && (
+                <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+                  {loginError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isRegistering}
+                className="flex w-full min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-orange-600 to-orange-700 px-5 py-3 text-base font-bold text-white shadow-sm hover:from-orange-700 hover:to-orange-800 disabled:opacity-60"
+              >
+                <CheckCircle2 className="h-5 w-5" />
+                <span>{isRegistering ? 'Qeydiyyat aparılır...' : 'Qeydiyyatı tamamla və daxil ol'}</span>
+              </button>
+            </form>
+          ) : (
+            <div className="mt-6 space-y-4">
+              <button
+                type="button"
+                disabled={isGoogleLoading || isLoggingIn}
+                onClick={() => void handleShopGoogleLogin()}
+                className="flex w-full min-h-[54px] items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-base font-bold text-slate-950 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-60"
+              >
+                <GoogleBadgeIcon />
+                <span>
+                  {isGoogleLoading ? 'Gmail yoxlanılır...' : 'Google (Gmail) ilə daxil ol / Qeydiyyat'}
+                </span>
+              </button>
+
+              {loginError && (
+                <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+                  {loginError}
+                </div>
+              )}
+
+              <p className="text-xs leading-relaxed text-slate-500">
+                Bir toxunuşla Gmail hesabınızla mağaza qeydiyyatından keçin və müştəri sifarişlərini dərhal qəbul edin.
+              </p>
+
+              <div className="pt-1 text-center">
+                <button
+                  type="button"
+                  onClick={() => setShowPinFallback((v) => !v)}
+                  className="text-xs font-semibold text-slate-500 underline underline-offset-2 hover:text-slate-900"
+                >
+                  {showPinFallback ? 'PIN bölməsini gizlət' : 'WhatsApp + PIN ilə köhnə giriş'}
+                </button>
+              </div>
+
+              {showPinFallback && (
+                <form onSubmit={handleLogin} className="space-y-3 border-t border-slate-100 pt-4">
+                  <div>
+                    <label htmlFor="shop-phone" className="block text-xs font-bold text-slate-800">
+                      Telefon nömrəsi (WhatsApp)
+                    </label>
+                    <input
+                      id="shop-phone"
+                      type="tel"
+                      inputMode="tel"
+                      value={loginPhone}
+                      onChange={(e) => setLoginPhone(e.target.value)}
+                      placeholder="+994 50 555 10 10"
+                      className="mt-1.5 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="shop-pin" className="block text-xs font-bold text-slate-800">
+                      PIN kod
+                    </label>
+                    <input
+                      id="shop-pin"
+                      type="password"
+                      inputMode="numeric"
+                      value={loginPin}
+                      onChange={(e) => setLoginPin(e.target.value)}
+                      placeholder="Administrator tərəfindən verilən PIN"
+                      className="mt-1.5 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                      required
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isLoggingIn || isGoogleLoading}
+                    className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
+                  >
+                    <Lock className="h-4 w-4" />
+                    <span>{isLoggingIn ? 'Yoxlanılır...' : 'PIN ilə daxil ol'}</span>
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
         </div>
       </div>
     );

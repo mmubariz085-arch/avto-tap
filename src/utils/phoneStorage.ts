@@ -170,6 +170,8 @@ export async function saveAdminBackupToPhone(
   const backup: AdminPhoneBackup = {
     shops: shops.map((s) => ({
       id: s.id,
+      ownerUid: s.ownerUid,
+      ownerEmail: s.ownerEmail,
       name: s.name,
       district: s.district,
       whatsapp: s.whatsapp,
