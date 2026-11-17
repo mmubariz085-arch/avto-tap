@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
 import { triggerAlertFeedback, unlockAudio } from '../utils/notify';
-import { postJsonWithRetry } from '../utils/api';
+import { extractApiError, postJsonWithRetry } from '../utils/api';
 import type {
   PartAvailability,
   PartCondition,
@@ -60,7 +60,7 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
         const data = text ? JSON.parse(text) : {};
         if (!active) return;
         if (!res.ok) {
-          setErrorMsg(data.error || 'Sorğu yüklənmədi.');
+          setErrorMsg(extractApiError(data, 'Sorğu yüklənmədi.'));
           return;
         }
         setShop(data.shop);
@@ -114,7 +114,7 @@ export const QuickReplyView: React.FC<QuickReplyViewProps> = ({
       );
       if (!result.ok || !result.data.quote) {
         triggerAlertFeedback('error');
-        setSubmitError(result.data.error || 'Cavab göndərilmədi.');
+        setSubmitError(extractApiError(result.data, 'Cavab göndərilmədi.'));
         return;
       }
       triggerAlertFeedback('success');

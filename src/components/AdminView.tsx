@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
 import { triggerAlertFeedback } from '../utils/notify';
-import { postJsonWithRetry } from '../utils/api';
+import { extractApiError, postJsonWithRetry } from '../utils/api';
 import {
   type AdminPhoneBackup,
   clearAuthTokenFromPhone,
@@ -423,7 +423,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         { retries: 2, timeoutMs: 15000 }
       );
       if (!result.ok || !result.data.token) {
-        setLoginError(result.data.error || 'Admin girişi təsdiqlənmədi.');
+        setLoginError(extractApiError(result.data, 'Admin girişi təsdiqlənmədi.'));
         return;
       }
 
@@ -498,7 +498,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
         { retries: 2, timeoutMs: 15000 }
       );
       if (!result.ok || !result.data.token) {
-        setLoginError(result.data.error || 'Şifrə yanlışdır.');
+        setLoginError(extractApiError(result.data, 'Şifrə yanlışdır.'));
         return;
       }
       try {
@@ -557,7 +557,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       });
       const data = await res.json();
       if (!res.ok) {
-        setStorageFeedback(data.error || 'Bərpa alınmadı.');
+        setStorageFeedback(extractApiError(data, 'Bərpa alınmadı.'));
         return;
       }
       setStorageFeedback(`Telefon yaddaşından ${data.restoredCount} mağaza bərpa edildi`);
@@ -624,7 +624,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       });
       const data = await res.json();
       if (!res.ok) {
-        setTgError(data.error || 'Telegram yeniləmələri alınmadı.');
+        setTgError(extractApiError(data, 'Telegram yeniləmələri alınmadı.'));
         return;
       }
       const list = Array.isArray(data.subscribers) ? (data.subscribers as TelegramSubscriber[]) : [];
@@ -727,7 +727,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       });
       const data = await res.json();
       if (!res.ok) {
-        setShopFormError(data.error || 'Yadda saxlanmadı.');
+        setShopFormError(extractApiError(data, 'Yadda saxlanmadı.'));
         return;
       }
       if (data.shop) {
@@ -828,7 +828,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onExitAdmin }) => {
       });
       const data = await res.json();
       if (!res.ok) {
-        setPasswordChangeMsg(data.error || 'Şifrə dəyişdirilmədi.');
+        setPasswordChangeMsg(extractApiError(data, 'Şifrə dəyişdirilmədi.'));
         return;
       }
       setNewAdminPassword('');

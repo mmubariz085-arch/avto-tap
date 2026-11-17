@@ -7,6 +7,7 @@ import {
   triggerAlertFeedback,
   unlockAudio,
 } from '../utils/notify';
+import { extractApiError } from '../utils/api';
 import { saveOrderSnapshotToPhone } from '../utils/phoneStorage';
 import type { LegalDocType } from './LegalModal';
 import { PushNotificationsButton } from './PushNotificationsButton';
@@ -183,7 +184,7 @@ export const DriverView: React.FC<DriverViewProps> = ({
               continue;
             }
             triggerAlertFeedback('error');
-            setErrorMsg(data.error || 'Sorğu göndərilərkən xəta baş verdi.');
+            setErrorMsg(extractApiError(data, 'Sorğu göndərilərkən xəta baş verdi.'));
             return;
           }
 

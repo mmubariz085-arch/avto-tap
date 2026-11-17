@@ -5,6 +5,38 @@ export interface JsonResponse<T = Record<string, unknown>> {
   networkError?: boolean;
 }
 
+export function extractApiError(
+  payload: unknown,
+  fallback = 'Server xətası baş verdi. Yenidən cəhd edin.'
+): string {
+  if (typeof payload === 'string') {
+    const trimmed = payload.trim();
+    return trimmed || fallback;
+  }
+  if (!payload || typeof payload !== 'object') {
+    return fallback;
+  }
+
+  const obj = payload as Record<string, unknown>;
+  const nestedError = obj.error;
+  if (typeof nestedError === 'string' && nestedError.trim()) {
+    return nestedError.trim();
+  }
+  if (nestedError && typeof nestedError === 'object') {
+    const errObj = nestedError as Record<string, unknown>;
+    if (typeof errObj.message === 'string' && errObj.message.trim()) {
+      return errObj.message.trim();
+    }
+    if (typeof errObj.error === 'string' && errObj.error.trim()) {
+      return errObj.error.trim();
+    }
+  }
+  if (typeof obj.message === 'string' && obj.message.trim()) {
+    return obj.message.trim();
+  }
+  return fallback;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -62,7 +94,10 @@ export async function postJsonWithRetry<T = Record<string, unknown>>(
       const rawText = await res.text();
       let parsed: Record<string, unknown> | null = null;
       try {
-        parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+        const json = rawText ? (JSON.parse(rawText) as unknown) : {};
+        parsed = json && typeof json === 'object' && !Array.isArray(json)
+          ? (json as Record<string, unknown>)
+          : {};
       } catch {
         parsed = null;
       }
@@ -82,6 +117,16 @@ export async function postJsonWithRetry<T = Record<string, unknown>>(
           data: { error: 'Server oyanır, zəhmət olmasa yenidən cəhd edin.' } as T,
           networkError: true,
         };
+      }
+
+      if (!res.ok || ('error' in parsed && parsed.error !== undefined && typeof parsed.error !== 'string')) {
+        const safeErr = extractApiError(
+          parsed,
+          res.ok ? '' : 'Sorğu yerinə yetirilmədi. Yenidən cəhd edin.'
+        );
+        if (safeErr) {
+          parsed = { ...parsed, error: safeErr };
+        }
       }
 
       return {

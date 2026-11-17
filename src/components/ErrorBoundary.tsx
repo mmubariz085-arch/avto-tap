@@ -103,10 +103,16 @@ export class ErrorBoundary extends React.Component<
     this.state = { hasError: false, errorMessage: '' };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    const rawMsg =
+      error && typeof error === 'object' && 'message' in error && typeof (error as { message?: unknown }).message === 'string'
+        ? (error as { message: string }).message
+        : typeof error === 'string'
+          ? error
+          : '';
     return {
       hasError: true,
-      errorMessage: error?.message || 'Gözlənilməz xəta baş verdi.',
+      errorMessage: rawMsg || 'Gözlənilməz xəta baş verdi.',
     };
   }
 

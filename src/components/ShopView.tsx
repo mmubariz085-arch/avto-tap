@@ -20,7 +20,7 @@ import {
   triggerAlertFeedback,
   unlockAudio,
 } from '../utils/notify';
-import { postJsonWithRetry } from '../utils/api';
+import { extractApiError, postJsonWithRetry } from '../utils/api';
 import {
   clearAuthTokenFromPhone,
   clearPreferredSection,
@@ -73,7 +73,14 @@ const AVAILABILITIES: PartAvailability[] = ['Mövcuddur', 'Anbarda son ədəd', 
 function isValidCachedShop(val: unknown): val is PublicShopInfo {
   if (!val || typeof val !== 'object') return false;
   const s = val as Partial<PublicShopInfo>;
-  return typeof s.id === 'string' && typeof s.name === 'string' && typeof s.status === 'string';
+  return (
+    typeof s.id === 'string' &&
+    typeof s.name === 'string' &&
+    typeof s.status === 'string' &&
+    typeof s.whatsapp === 'string' &&
+    typeof s.tariff === 'string' &&
+    typeof s.expiresAt === 'string'
+  );
 }
 
 function normalizeCachedFeed(items: unknown): ShopFeedItem[] {
@@ -84,7 +91,8 @@ function normalizeCachedFeed(items: unknown): ShopFeedItem[] {
       typeof item === 'object' &&
       typeof (item as ShopFeedItem).id === 'string' &&
       typeof (item as ShopFeedItem).carBrandModel === 'string' &&
-      typeof (item as ShopFeedItem).partName === 'string'
+      typeof (item as ShopFeedItem).partName === 'string' &&
+      typeof (item as ShopFeedItem).year === 'string'
   );
 }
 
@@ -494,7 +502,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
         { retries: 2, timeoutMs: 15000 }
       );
       if (!result.ok || !result.data.token || !result.data.shop) {
-        setLoginError(result.data.error || 'Giriş alınmadı.');
+        setLoginError(extractApiError(result.data, 'Giriş alınmadı.'));
         return;
       }
       try {
@@ -542,7 +550,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       );
 
       if (!result.ok) {
-        setLoginError(result.data.error || 'Gmail ilə giriş alınmadı.');
+        setLoginError(extractApiError(result.data, 'Gmail ilə giriş alınmadı.'));
         return;
       }
 
@@ -700,7 +708,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       );
 
       if (!result.ok || !result.data.token || !result.data.shop) {
-        setLoginError(result.data.error || 'Qeydiyyat tamamlanmadı.');
+        setLoginError(extractApiError(result.data, 'Qeydiyyat tamamlanmadı.'));
         return;
       }
 
@@ -792,7 +800,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
       );
       if (!result.ok || !result.data.quote) {
         triggerAlertFeedback('error', { sound: soundEnabled, vibrate: soundEnabled });
-        setQuoteError(result.data.error || 'Qiymət göndərilmədi.');
+        setQuoteError(extractApiError(result.data, 'Qiymət göndərilmədi.'));
         return;
       }
 

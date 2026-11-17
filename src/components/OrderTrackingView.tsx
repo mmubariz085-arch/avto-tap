@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Bell, CheckCircle2, Crown, MessageCircle, Phone, Plus, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { buildTelUrl, buildWhatsAppUrl, formatTimeAgoAz } from '../utils/phone';
 import { triggerAlertFeedback } from '../utils/notify';
+import { extractApiError } from '../utils/api';
 import { loadOrderSnapshotFromPhone, saveOrderSnapshotToPhone } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
 import type { RequestWithQuotes, ShopQuote, WsEvent } from '../types';
@@ -83,7 +84,7 @@ export const OrderTrackingView: React.FC<OrderTrackingViewProps> = ({
           setErrorMsg(null);
           return;
         }
-        setErrorMsg(data.error || 'Sifariş tapılmadı.');
+        setErrorMsg(extractApiError(data, 'Sifariş tapılmadı.'));
         setOrder(null);
         return;
       }
