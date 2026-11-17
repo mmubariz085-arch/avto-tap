@@ -34,25 +34,11 @@ import {
   saveShopProfileToPhone,
 } from '../utils/phoneStorage';
 import { PushNotificationsButton } from './PushNotificationsButton';
-import { UnauthorizedDomainNotice } from './UnauthorizedDomainNotice';
-import {
-  auth,
-  consumeGmailRedirectResult,
-  isUnauthorizedDomainError,
-  loadMyShopFromFirestore,
-  mapFirebaseAuthErrorAz,
-  resolveFirebaseUserEmail,
-  signInWithGmail,
-  signOutFirebase,
-  syncShopToFirestore,
-  syncUserProfileToFirestore,
-} from '../firebase';
 import type {
   PartAvailability,
   PartCondition,
   PartRequest,
   PublicShopInfo,
-  Shop,
   ShopQuote,
   WsEvent,
 } from '../types';
@@ -96,15 +82,6 @@ function normalizeCachedFeed(items: unknown): ShopFeedItem[] {
   );
 }
 
-const GoogleBadgeIcon: React.FC = () => (
-  <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      fill="#EA4335"
-      d="M12 10.2v3.9h5.4c-.2 1.2-1.5 3.6-5.4 3.6-3.2 0-5.9-2.7-5.9-6s2.7-6 5.9-6c1.8 0 3.1.8 3.8 1.5l2.6-2.5C16.7 3.1 14.6 2 12 2 6.5 2 2 6.5 2 12s4.5 10 10 10c5.8 0 9.6-4.1 9.6-9.8 0-.7-.1-1.2-.2-1.7H12z"
-    />
-  </svg>
-);
-
 export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReplyId }) => {
   const [token, setToken] = useState<string | null>(() => {
     try {
@@ -118,7 +95,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   const [feed, setFeed] = useState<ShopFeedItem[]>([]);
   const [loading, setLoading] = useState<boolean>(Boolean(token));
 
-  // Login & Gmail registration state
+  // Login state (WhatsApp + PIN)
   const [loginPhone, setLoginPhone] = useState(() => {
     try {
       return localStorage.getItem('avtotap_shop_phone') || '+994 ';
@@ -128,19 +105,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
   });
   const [loginPin, setLoginPin] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [unauthorizedDomain, setUnauthorizedDomain] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [showPinFallback, setShowPinFallback] = useState(false);
-  const [pendingGoogleReg, setPendingGoogleReg] = useState<{
-    uid: string;
-    email: string;
-    displayName: string;
-  } | null>(null);
-  const [regShopName, setRegShopName] = useState('');
-  const [regWhatsapp, setRegWhatsapp] = useState('+994 ');
-  const [regDistrict, setRegDistrict] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false);
 
   // Quote modal state
   const [activeRequest, setActiveRequest] = useState<ShopFeedItem | null>(null);
@@ -529,221 +494,6 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     }
   };
 
-  const completeShopGoogleSignIn = useCallback(
-    async (user: NonNullable<Awaited<ReturnType<typeof signInWithGmail>>>) => {
-      const idToken = await user.getIdToken();
-      void syncUserProfileToFirestore(user, 'shop').catch(() => {});
-
-      const result = await postJsonWithRetry<{
-        registered?: boolean;
-        token?: string;
-        shop?: PublicShopInfo;
-        adminWhatsapp?: string;
-        uid?: string;
-        email?: string;
-        displayName?: string;
-        error?: string;
-      }>(
-        '/api/auth/firebase-shop',
-        { idToken },
-        { retries: 2, timeoutMs: 15000 }
-      );
-
-      if (!result.ok) {
-        setLoginError(extractApiError(result.data, 'Gmail ilə giriş alınmadı.'));
-        return;
-      }
-
-      if (result.data.registered && result.data.token && result.data.shop) {
-        try {
-          localStorage.setItem('avtotap_shop_token', result.data.token);
-          localStorage.setItem('avtotap_preferred_section', 'shop');
-        } catch {
-          // ignore
-        }
-        setPendingGoogleReg(null);
-        setToken(result.data.token);
-        setShop(result.data.shop);
-        setAdminWhatsapp(result.data.adminWhatsapp || '');
-        setLoading(true);
-        void saveAuthTokenToPhone('shop', result.data.token);
-        void savePreferredSection('shop');
-        void saveShopProfileToPhone(
-          result.data.shop as unknown as Record<string, unknown>,
-          result.data.adminWhatsapp || ''
-        );
-        return;
-      }
-
-      // Check Firestore in case container restarted and shop was saved in cloud
-      try {
-        const cloudShop = await loadMyShopFromFirestore(user.uid);
-        if (cloudShop && cloudShop.name && cloudShop.whatsapp) {
-          const restored = await postJsonWithRetry<{
-            token?: string;
-            shop?: PublicShopInfo;
-            adminWhatsapp?: string;
-          }>(
-            '/api/shop/register-google',
-            {
-              idToken,
-              name: cloudShop.name,
-              whatsapp: cloudShop.whatsapp,
-              district: cloudShop.district || '',
-            },
-            { retries: 1, timeoutMs: 15000 }
-          );
-          if (restored.ok && restored.data.token && restored.data.shop) {
-            try {
-              localStorage.setItem('avtotap_shop_token', restored.data.token);
-              localStorage.setItem('avtotap_preferred_section', 'shop');
-            } catch {
-              // ignore
-            }
-            setPendingGoogleReg(null);
-            setToken(restored.data.token);
-            setShop(restored.data.shop);
-            setAdminWhatsapp(restored.data.adminWhatsapp || '');
-            setLoading(true);
-            void saveAuthTokenToPhone('shop', restored.data.token);
-            void savePreferredSection('shop');
-            void saveShopProfileToPhone(
-              restored.data.shop as unknown as Record<string, unknown>,
-              restored.data.adminWhatsapp || ''
-            );
-            return;
-          }
-        }
-      } catch {
-        // ignore if no cloud shop yet
-      }
-
-      setPendingGoogleReg({
-        uid: user.uid,
-        email: resolveFirebaseUserEmail(user) || (result.data.email || '').trim().toLowerCase(),
-        displayName: user.displayName || result.data.displayName || '',
-      });
-    },
-    []
-  );
-
-  useEffect(() => {
-    let active = true;
-    void consumeGmailRedirectResult()
-      .then((redirectUser) => {
-        if (!active || !redirectUser) return;
-        setIsGoogleLoading(true);
-        return completeShopGoogleSignIn(redirectUser).finally(() => {
-          if (active) setIsGoogleLoading(false);
-        });
-      })
-      .catch((err) => {
-        if (!active) return;
-        if (isUnauthorizedDomainError(err)) {
-          setUnauthorizedDomain(true);
-          setShowPinFallback(true);
-        }
-        setLoginError(mapFirebaseAuthErrorAz(err));
-      });
-    return () => {
-      active = false;
-    };
-  }, [completeShopGoogleSignIn]);
-
-  const handleShopGoogleLogin = async () => {
-    if (isGoogleLoading || isLoggingIn || isRegistering) return;
-    setLoginError(null);
-    setUnauthorizedDomain(false);
-    setIsGoogleLoading(true);
-    try {
-      const user = await signInWithGmail();
-      if (!user) {
-        return;
-      }
-      await completeShopGoogleSignIn(user);
-    } catch (err) {
-      if (isUnauthorizedDomainError(err)) {
-        setUnauthorizedDomain(true);
-        setShowPinFallback(true);
-      }
-      setLoginError(mapFirebaseAuthErrorAz(err));
-    } finally {
-      setIsGoogleLoading(false);
-    }
-  };
-
-  const handleCompleteGoogleRegistration = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pendingGoogleReg || isRegistering) return;
-    setLoginError(null);
-
-    if (regShopName.trim().length < 2) {
-      setLoginError('Zəhmət olmasa mağazanızın adını daxil edin.');
-      return;
-    }
-
-    setIsRegistering(true);
-    try {
-      const currentUser = auth.currentUser;
-      if (!currentUser) {
-        setLoginError('Gmail sessiyası bitdi. Yenidən Google ilə daxil olun.');
-        setPendingGoogleReg(null);
-        return;
-      }
-      const idToken = await currentUser.getIdToken();
-      const result = await postJsonWithRetry<{
-        token?: string;
-        shop?: PublicShopInfo;
-        adminWhatsapp?: string;
-        error?: string;
-      }>(
-        '/api/shop/register-google',
-        {
-          idToken,
-          name: regShopName.trim(),
-          whatsapp: regWhatsapp.trim(),
-          district: regDistrict.trim(),
-        },
-        { retries: 2, timeoutMs: 15000 }
-      );
-
-      if (!result.ok || !result.data.token || !result.data.shop) {
-        setLoginError(extractApiError(result.data, 'Qeydiyyat tamamlanmadı.'));
-        return;
-      }
-
-      const fullShop: Shop = {
-        ...result.data.shop,
-        pin: '0000',
-        createdAt: new Date().toISOString(),
-      };
-      void syncUserProfileToFirestore(currentUser, 'shop').catch(() => {});
-      void syncShopToFirestore(fullShop).catch(() => {});
-
-      try {
-        localStorage.setItem('avtotap_shop_token', result.data.token);
-        localStorage.setItem('avtotap_preferred_section', 'shop');
-      } catch {
-        // ignore
-      }
-      setPendingGoogleReg(null);
-      setToken(result.data.token);
-      setShop(result.data.shop);
-      setAdminWhatsapp(result.data.adminWhatsapp || '');
-      setLoading(true);
-      void saveAuthTokenToPhone('shop', result.data.token);
-      void savePreferredSection('shop');
-      void saveShopProfileToPhone(
-        result.data.shop as unknown as Record<string, unknown>,
-        result.data.adminWhatsapp || ''
-      );
-    } catch (err) {
-      setLoginError(mapFirebaseAuthErrorAz(err));
-    } finally {
-      setIsRegistering(false);
-    }
-  };
-
   const handleLogout = () => {
     try {
       localStorage.removeItem('avtotap_shop_token');
@@ -754,9 +504,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     void clearAuthTokenFromPhone('shop');
     void clearPreferredSection();
     void clearShopProfileFromPhone();
-    void signOutFirebase();
     setLoginError(null);
-    setPendingGoogleReg(null);
     setToken(null);
     setShop(null);
     setFeed([]);
@@ -832,7 +580,7 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
     }
   };
 
-  // Login / Gmail Registration Screen
+  // Login Screen (WhatsApp + PIN)
   if (!token || (!shop && !loading)) {
     return (
       <div className="mx-auto w-full max-w-md px-4 py-8 sm:py-14">
@@ -844,177 +592,64 @@ export const ShopView: React.FC<ShopViewProps> = ({ replyRequestId, onClearReply
             <div>
               <h1 className="font-display text-xl font-extrabold text-slate-950">Mağaza kabineti</h1>
               <p className="text-xs text-slate-500">
-                {pendingGoogleReg
-                  ? 'Yeni mağaza qeydiyyatını tamamlayın'
-                  : 'Gmail ilə daxil olun və ya mağazanızı qeyd edin'}
+                Sürücü sorğularını görmək və qiymət göndərmək üçün daxil olun
               </p>
             </div>
           </div>
 
-          {pendingGoogleReg ? (
-            <form onSubmit={handleCompleteGoogleRegistration} className="mt-6 space-y-4">
-              <div className="flex items-center justify-between gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs">
-                <div className="min-w-0">
-                  <span className="block font-semibold text-emerald-800">Təsdiqlənmiş Gmail</span>
-                  <span className="block truncate font-mono font-bold text-slate-950">
-                    {pendingGoogleReg.email}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void signOutFirebase();
-                    setPendingGoogleReg(null);
-                    setLoginError(null);
-                  }}
-                  className="shrink-0 font-bold text-slate-600 underline underline-offset-2 hover:text-slate-950"
-                >
-                  Dəyiş
-                </button>
-              </div>
-
-              <div>
-                <label htmlFor="reg-shop-name" className="block text-sm font-bold text-slate-900">
-                  Mağazanın adı
-                </label>
-                <input
-                  id="reg-shop-name"
-                  type="text"
-                  value={regShopName}
-                  onChange={(e) => setRegShopName(e.target.value)}
-                  placeholder="Məsələn: Şərur Avto Zapçast"
-                  className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 text-base text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="reg-shop-wa" className="block text-sm font-bold text-slate-900">
-                  WhatsApp nömrəsi (müştərilər üçün)
-                </label>
-                <input
-                  id="reg-shop-wa"
-                  type="tel"
-                  inputMode="tel"
-                  value={regWhatsapp}
-                  onChange={(e) => setRegWhatsapp(e.target.value)}
-                  placeholder="+994 50 555 10 10"
-                  className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="reg-shop-district" className="block text-sm font-bold text-slate-900">
-                  Ünvan <span className="font-normal text-slate-500">(istəyə bağlı)</span>
-                </label>
-                <input
-                  id="reg-shop-district"
-                  type="text"
-                  value={regDistrict}
-                  onChange={(e) => setRegDistrict(e.target.value)}
-                  placeholder="Məsələn: Şərur, Mərkəzi küçə"
-                  className="mt-1.5 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 text-sm text-slate-950 focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
-                />
-              </div>
-
-              {loginError && (
-                <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
-                  {loginError}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={isRegistering}
-                className="flex w-full min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-orange-600 to-orange-700 px-5 py-3 text-base font-bold text-white shadow-sm hover:from-orange-700 hover:to-orange-800 disabled:opacity-60"
-              >
-                <CheckCircle2 className="h-5 w-5" />
-                <span>{isRegistering ? 'Qeydiyyat aparılır...' : 'Qeydiyyatı tamamla və daxil ol'}</span>
-              </button>
-            </form>
-          ) : (
-            <div className="mt-6 space-y-4">
-              <button
-                type="button"
-                disabled={isGoogleLoading || isLoggingIn}
-                onClick={() => void handleShopGoogleLogin()}
-                className="flex w-full min-h-[54px] items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-base font-bold text-slate-950 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-60"
-              >
-                <GoogleBadgeIcon />
-                <span>
-                  {isGoogleLoading ? 'Gmail yoxlanılır...' : 'Google (Gmail) ilə daxil ol / Qeydiyyat'}
-                </span>
-              </button>
-
-              {loginError && (
-                <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
-                  {loginError}
-                </div>
-              )}
-
-              {unauthorizedDomain && <UnauthorizedDomainNotice />}
-
-              <p className="text-xs leading-relaxed text-slate-500">
-                Bir toxunuşla Gmail hesabınızla mağaza qeydiyyatından keçin və müştəri sifarişlərini dərhal qəbul edin.
-              </p>
-
-              <div className="pt-1 text-center">
-                <button
-                  type="button"
-                  onClick={() => setShowPinFallback((v) => !v)}
-                  className="text-xs font-semibold text-slate-500 underline underline-offset-2 hover:text-slate-900"
-                >
-                  {showPinFallback ? 'PIN bölməsini gizlət' : 'WhatsApp + PIN ilə köhnə giriş'}
-                </button>
-              </div>
-
-              {showPinFallback && (
-                <form onSubmit={handleLogin} className="space-y-3 border-t border-slate-100 pt-4">
-                  <div>
-                    <label htmlFor="shop-phone" className="block text-xs font-bold text-slate-800">
-                      Telefon nömrəsi (WhatsApp)
-                    </label>
-                    <input
-                      id="shop-phone"
-                      type="tel"
-                      inputMode="tel"
-                      value={loginPhone}
-                      onChange={(e) => setLoginPhone(e.target.value)}
-                      placeholder="+994 50 555 10 10"
-                      className="mt-1.5 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="shop-pin" className="block text-xs font-bold text-slate-800">
-                      PIN kod
-                    </label>
-                    <input
-                      id="shop-pin"
-                      type="password"
-                      inputMode="numeric"
-                      value={loginPin}
-                      onChange={(e) => setLoginPin(e.target.value)}
-                      placeholder="Administrator tərəfindən verilən PIN"
-                      className="mt-1.5 w-full min-h-[48px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
-                      required
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={isLoggingIn || isGoogleLoading}
-                    className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
-                  >
-                    <Lock className="h-4 w-4" />
-                    <span>{isLoggingIn ? 'Yoxlanılır...' : 'PIN ilə daxil ol'}</span>
-                  </button>
-                </form>
-              )}
+          <form onSubmit={handleLogin} className="mt-6 space-y-4">
+            <div>
+              <label htmlFor="shop-phone" className="block text-xs font-bold text-slate-800">
+                Telefon nömrəsi (WhatsApp)
+              </label>
+              <input
+                id="shop-phone"
+                type="tel"
+                inputMode="tel"
+                value={loginPhone}
+                onChange={(e) => setLoginPhone(e.target.value)}
+                placeholder="+994 50 555 10 10"
+                className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                required
+              />
             </div>
-          )}
+
+            <div>
+              <label htmlFor="shop-pin" className="block text-xs font-bold text-slate-800">
+                PIN kod
+              </label>
+              <input
+                id="shop-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="current-password"
+                value={loginPin}
+                onChange={(e) => setLoginPin(e.target.value)}
+                placeholder="Administrator tərəfindən verilən PIN"
+                className="mt-1.5 w-full min-h-[50px] rounded-2xl border border-slate-200 bg-slate-50/75 px-4 font-mono tabular-nums text-base text-slate-950 transition-colors focus:border-orange-600 focus:bg-white focus:outline-none focus:ring-4 focus:ring-orange-600/10"
+                required
+              />
+            </div>
+
+            {loginError && (
+              <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+                {loginError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isLoggingIn}
+              className="flex w-full min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[#0B1120] px-5 py-3 text-base font-bold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
+            >
+              <Lock className="h-4 w-4" />
+              <span>{isLoggingIn ? 'Yoxlanılır...' : 'Daxil ol'}</span>
+            </button>
+
+            <p className="text-center text-xs leading-relaxed text-slate-500">
+              Daxil olduqdan sonra kabinet telefonunuzun yaddaşında daimi saxlanılır.
+            </p>
+          </form>
         </div>
       </div>
     );
